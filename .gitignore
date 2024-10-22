@@ -1,0 +1,10 @@
+__pycache__/*
+*pyc
+*egg
+env/*
+env*/*
+build/
+*egg-info/*
+.coverage
+.mypy_cache/*
+
