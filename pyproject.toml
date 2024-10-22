@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["extraasync"]
+
+[tool.setuptools.dynamic]
+version = {attr = "extraasync.__version__"}
+
+[project]
+name = "extraasync"
+dynamic = ["version"]
+description = ""
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">= 3.9"
+authors = [{ name = "Joao S. O. Bueno" }]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+repository = "https://github.com/jsbueno/extraasync"
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+
