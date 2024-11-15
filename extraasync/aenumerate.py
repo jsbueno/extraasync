@@ -14,7 +14,5 @@ class aenumerate:
                 break
             self.index += 1
 
-
     def __repr__(self):
         return f"Asynchronous enumeration for {self.iterable} at index {self.index}"
-
