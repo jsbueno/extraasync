@@ -7,11 +7,11 @@ import typing as t
 
 T = t.TypeVar("T")
 
-_non_bridge_loop = contextvars.ContextVar("bridge_loop", default=None)
+_non_bridge_loop = contextvars.ContextVar("non_bridge_loop", default=None)
 
 
 def sync_to_async(
-    func: t.Callable[[...,], T],
+    func: t.Callable[[...,], T] | t.Coroutine,
     args: t.Sequence[t.Any] = (),
     kwargs: t.Mapping[str, t.Any | None] = None
 ) -> T:
@@ -44,7 +44,9 @@ def sync_to_async(
 
 
 def _sync_to_async_non_bridge(
-    func: t.Callable[[...,], T], args: t.Sequence[t.Any], kwargs: t.Mapping[str, t.Any]
+    func: t.Callable[[...,], T] | t.Coroutine,
+    args: t.Sequence[t.Any],
+    kwargs: t.Mapping[str, t.Any]
 ) -> T:
     loop = _non_bridge_loop.get()
     if not loop:
@@ -60,5 +62,12 @@ def _sync_to_async_non_bridge(
     return loop.run_until_complete(coro)
 
 
-def async_to_sync():
-    pass
+async def async_to_sync(
+    func: t.Callable[[...,], T],
+    args: t.Sequence[t.Any] = (),
+    kwargs: t.Mapping[str, t.Any | None] = None
+) -> t.Awaitable[T]:
+    if kwargs is None:
+        kwargs = {}
+
+    return func(*args, **kwargs)

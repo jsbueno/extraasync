@@ -27,8 +27,25 @@ def test_plain_sync_to_async_with_coroutine():
 
 
 
-@pytest.mark.skip()
-def async_sync_bridge():
+def test_async_sync_plain():
+    # this is actually a no-op,
+    # but for the fact the sync function
+    # now has to be awaited.
+
+    done = False
+
+    def blah():
+        nonlocal done
+        done = True
+
+    async def bleh():
+        await async_to_sync(blah)
+    asyncio.run(bleh())
+
+    assert done
+
+
+def test_async_sync_bridge():
     done = done2 = done3 = False
 
     async def blah():
@@ -38,7 +55,7 @@ def async_sync_bridge():
 
     def bleh():
         nonlocal done2
-        sync_to_async(bla())
+        sync_to_async(blah)
         done2 = True
 
     async def blih():
