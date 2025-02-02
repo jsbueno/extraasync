@@ -149,6 +149,7 @@ class _ThreadPool:
         self.running = contextvars.ContextVar("running", default=())
 
     def __enter__(self):
+        breakpoint()
         if self.idle:
             queue_set = self.idle.pop()
         else:
