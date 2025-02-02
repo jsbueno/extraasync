@@ -4,16 +4,20 @@ import inspect
 import logging
 from queue import Queue as ThreadingQueue
 import threading
-import time
 
 import typing as t
 
 from .async_hooks import at_loop_stop_callback
 
+__all__ = ["sync_to_async", "async_to_sync"]
+
 
 logger = logging.getLogger(__name__)
 #############################
 ### debugging logger boilerplate
+# Uncomment to ensure logger debug output
+
+
 #logger.setLevel(logging.DEBUG)
 
 ## Create a console handler and set its level to DEBUG
@@ -33,11 +37,23 @@ logger = logging.getLogger(__name__)
 T = t.TypeVar("T")
 
 _non_bridge_loop = contextvars.ContextVar("non_bridge_loop", default=None)
-#_bridge = contextvars.ContextVar("_bridge", default=None)
-_worker_threads = {}
-
 _context_bound_loop = contextvars.ContextVar("_context_bound_loop", default=None)
-_bridged_tasks = set()
+_poison = object()
+
+
+class _QueueSet(t.NamedTuple):
+    thread: threading.Thread
+    queue: ThreadingQueue
+    event: threading.Event
+
+
+class _SyncTask(t.NamedTuple):
+    sync_task: t.Callable
+    args: tuple
+    kwargs: dict
+    loop: asyncio.BaseEventLoop
+    context: contextvars.Context
+    done_future: asyncio.Future
 
 
 def sync_to_async(
@@ -73,7 +89,8 @@ def sync_to_async(
     context = root_sync_task.context
     # FIXME: are events "cheap"? Should them be added to the pool, instead
     # of creating one everytime?  (I guess it would be better)
-    event = threading.Event()
+    event = _ThreadPool.get(loop).all[threading.current_thread()].event
+
     event.clear()
     task = None # strong reference to the task
     #breakpoint()
@@ -120,7 +137,8 @@ class _ThreadPool:
 
     @classmethod
     def get(cls, loop=None):
-        loop = asyncio.get_running_loop()
+        if loop is None:
+            loop = asyncio.get_running_loop()
         if loop not in cls.pools:
             cls.pools[loop] = instance = _ThreadPool()
             instance.loop = loop
@@ -131,13 +149,9 @@ class _ThreadPool:
 
     def __init__(self):
         self.idle = set()
-        self.all = set()
+        self.all = dict()
         self.running = contextvars.ContextVar("running", default=())
 
-
-        #task = asyncio.current_task()
-        #loop = task.get_loop()
-        #context = task.get_context()
     def __enter__(self):
         if self.idle:
             queue_set = self.idle.pop()
@@ -148,7 +162,7 @@ class _ThreadPool:
             thread = threading.Thread(target=_sync_worker, args=(queue,))
             queue_set = _QueueSet(thread, queue, event)
             thread.start()
-            self.all.add(queue_set)
+            self.all[thread] = queue_set
         self.running.set(queue_set)
         return queue_set
 
@@ -158,7 +172,7 @@ class _ThreadPool:
         self.idle.add(queue_set)
 
     def close_threads(self):
-        for queue_set in self.all:
+        for queue_set in self.all.values():
             queue_set.queue.put(_poison)
         self.all.clear()
         self.idle.clear()
@@ -168,23 +182,6 @@ class _ThreadPool:
         running = bool(self.running.get())
         return f"<_ThreadPool with {len(self.all)} threads - with {len(self.all) - len(self.idle)} threads in use>"
 
-
-
-_poison = object()
-
-
-class _QueueSet(t.NamedTuple):
-    thread: threading.Thread
-    queue: ThreadingQueue
-    event: threading.Event
-
-class _SyncTask(t.NamedTuple):
-    sync_task: t.Callable
-    args: tuple
-    kwargs: dict
-    loop: asyncio.BaseEventLoop
-    context: contextvars.Context
-    done_future: asyncio.Future
 
 
 def _in_context_sync_worker(sync_task: _SyncTask):
