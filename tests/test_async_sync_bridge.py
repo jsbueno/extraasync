@@ -60,7 +60,9 @@ def test_async_sync_bridge_1():
 
     async def blih():
         nonlocal done3
-        await async_to_sync(bleh)
+        z = async_to_sync(bleh)
+        print(z)
+        await z
         done3 = True
 
     asyncio.run(blih())
