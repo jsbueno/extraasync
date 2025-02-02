@@ -14,14 +14,11 @@ name = "extraasync"
 dynamic = ["version"]
 description = ""
 readme = {file = "README.md", content-type = "text/markdown"}
-requires-python = ">= 3.9"
+requires-python = ">= 3.12"
 authors = [{ name = "Joao S. O. Bueno" }]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: Implementation :: CPython",

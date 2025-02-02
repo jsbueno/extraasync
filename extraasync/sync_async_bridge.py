@@ -8,9 +8,10 @@ import typing as t
 T = t.TypeVar("T")
 
 _non_bridge_loop = contextvars.ContextVar("non_bridge_loop", default=None)
-_bridge = contextvars.ContextVar("_bridge", default=None)
+#_bridge = contextvars.ContextVar("_bridge", default=None)
+_worker_threads = {}
 
-
+_context_bound_loop = contextvars.ContextVar("_context_bound_loop", default=None)
 
 def sync_to_async(
     func: t.Callable[[...,], T] | t.Coroutine,
@@ -41,6 +42,8 @@ def sync_to_async(
         loop = None
     if not loop:
         return _sync_to_async_non_bridge(func, args, kwargs)
+    # TODO: fix this - it is the missing part!
+    task = _context_bound_loop.get().create_task(func, args, kwargs)
     return NotImplementedError("Bridge mode is WIP")
 
 
@@ -64,6 +67,97 @@ def _sync_to_async_non_bridge(
     return loop.run_until_complete(coro)
 
 
+class _ThreadPool:
+    def __init__(self):
+        self.idle = set()
+        self.running = contextvars.ContextVar("running", default=())
+
+        #task = asyncio.current_task()
+        #loop = task.get_loop()
+        #context = task.get_context()
+    def __enter__(enter):
+        if self.idle:
+            queue_set = self.idle.pop()
+        else:
+            queue = queue.Queue()
+            return_queue = queue.Queue()
+            thread = threading.Thread(target=_sync_worker, args=(queue, return_queue))
+            queue_set = (thread, queue, return_queue)
+            # TODO: arrange callback to kill thread on loop shutting_down:
+            # extraasync.at_loop_shutdown(loop, lambda queue=queue: queue.put((_poison, None, None, None))
+            thread.start()
+        if (running := self.running.get()) == ():
+            self.running.set(running := [])
+        running.append(queue_set)
+        return queue_set
+
+    def __exit__(self, *exc_data):
+        queue_set = self.running.get().pop()
+        self.idle.add(queue_set)
+
+    def __repr__(self):
+        return f"<_ThreadPool with {len(self.idle)} idle  and {len(self.running.get())} threads>"
+
+
+_ThreadPool = _ThreadPool()
+
+
+_poison = object()
+_sucess, _failure = 1, 0
+
+class _SyncTask(t.NamedTuple):
+    sync_task: t.Callable
+    args: tuple
+    kwargs: dict
+    loop: asyncio.BaseEventLoop
+    context: contextvars.Context
+    done_future: asyncio.Future
+
+
+def _in_context_sync_worker(sync_task: _SyncTask):
+
+    _context_bound_loop.set(sync_task.loop)
+    return sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
+
+
+def _sync_worker(queue, return_queue):
+    """Inner function to call sync "tasks" in a separate thread.
+
+
+    """
+    while True:
+        sync_task_bundle = queue.get()
+        if sync_task is _poison:
+            return
+        try:
+
+            result = context.run(_in_context_sync_worker, sync_task_bundle)
+            status = _sucess
+        except BaseException as exc:
+            result = exc
+            status = _failure
+        loop = sync_task_bundle.loop
+        fut = sync_task_bundle.done_future
+        loop.call_soon_threadsafe(fut.set_result, (status, result) )
+        #return_queue.put((status, result))
+
+
+async def _sync_task_runner(func, args, kwargs):
+    task = asyncio.current_task()
+    loop = task.get_loop()
+    context = task.get_context()
+    done_future = loop.create_future()
+
+    with _ThreadPool as (_, queue, return_queue):
+        queue.put(_SyncTask(func, args, kwargs, loop, contextm, done_future))
+        #await done_future
+        status, result = await done_future
+
+    if status == _failure:
+        raise result
+    return result
+
+
 async def async_to_sync(
     func: t.Callable[[...,], T],
     args: t.Sequence[t.Any] = (),
@@ -73,41 +167,3 @@ async def async_to_sync(
         kwargs = {}
 
     loop = asyncio.get_running_loop()
-
-    task_stack = _TaskGen(func, args, kwargs)
-    first = True
-    future_result = None
-    while True:
-        try:
-            if first:
-                future = task_stack.__next__()
-                first = False
-            else:
-                future = task_stack.send(future_result)
-        except StopIteration as stop:
-            return stop.value
-
-
-    return func(*args, **kwargs)
-
-
-def _taskgen(func, *args, **kwargs):
-    inner_gen = _inner_gen()
-    bridge_stack = _bridge.get()
-    if bridge_stack is None:
-        bridge_stack = []
-        _bridge.set(bridge_stack)
-    bridge_stack.append(inner_gen)
-
-
-class _TaskGen:
-    def __init__(self, func, args, kwargs):
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-
-    def __next__(self):
-        ...
-
-    def send(...): pass
-
