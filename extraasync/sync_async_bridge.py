@@ -8,6 +8,8 @@ import typing as t
 T = t.TypeVar("T")
 
 _non_bridge_loop = contextvars.ContextVar("non_bridge_loop", default=None)
+_bridge = contextvars.ContextVar("_bridge", default=None)
+
 
 
 def sync_to_async(
@@ -70,4 +72,42 @@ async def async_to_sync(
     if kwargs is None:
         kwargs = {}
 
+    loop = asyncio.get_running_loop()
+
+    task_stack = _TaskGen(func, args, kwargs)
+    first = True
+    future_result = None
+    while True:
+        try:
+            if first:
+                future = task_stack.__next__()
+                first = False
+            else:
+                future = task_stack.send(future_result)
+        except StopIteration as stop:
+            return stop.value
+
+
     return func(*args, **kwargs)
+
+
+def _taskgen(func, *args, **kwargs):
+    inner_gen = _inner_gen()
+    bridge_stack = _bridge.get()
+    if bridge_stack is None:
+        bridge_stack = []
+        _bridge.set(bridge_stack)
+    bridge_stack.append(inner_gen)
+
+
+class _TaskGen:
+    def __init__(self, func, args, kwargs):
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+
+    def __next__(self):
+        ...
+
+    def send(...): pass
+
