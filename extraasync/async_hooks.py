@@ -66,6 +66,6 @@ def remove_loop_stop_callback(handle, loop=None):
     if loop is None:
         loop = asyncio.get_running_loop()
     cleanup_hooks = _loop_cleanuppers[loop].hooks
-    del hooks[handle]
+    del cleanup_hooks[handle]
 
 
