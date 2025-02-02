@@ -1,11 +1,32 @@
 import asyncio
 import contextvars
 import inspect
-import queue
+from queue import Queue as ThreadingQueue
 import threading
+import time
 
 import typing as t
 
+import logging
+
+logger = logging.getLogger(__name__)
+#############################
+## debugging logger boilerplate
+logger.setLevel(logging.DEBUG)
+
+# Create a console handler and set its level to DEBUG
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# Create a formatter and attach it to the handler
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(formatter)
+
+# Attach the handler to the logger
+logger.addHandler(console_handler)
+
+
+###########################
 
 T = t.TypeVar("T")
 
@@ -42,6 +63,7 @@ def sync_to_async(
     if kwargs is None:
         kwargs = {}
     root_sync_task = _context_bound_loop.get()
+    #breakpoint()
     if not root_sync_task:
         return _sync_to_async_non_bridge(func, args, kwargs)
 
@@ -54,12 +76,14 @@ def sync_to_async(
     task = None # strong reference to the task
     def do_it():
         nonlocal task
-        task = loop.create_task(func(args, kwargs), context=context)
-        task.add_done_callback(event.set)
+        task = loop.create_task(func(*args, **kwargs), context=context)
+        task.add_done_callback(lambda task, event=event: event.set())
 
     loop.call_soon_threadsafe(do_it)
     # Pauses sync-worker thread until original co-routine is finhsed in
     # the original event loop:
+    time.sleep(0.4)
+    assert task, "EEEEEEEEEEEKKKK"
     event.wait()
     if exc:=task.exception():
         raise exc
@@ -94,12 +118,13 @@ class _ThreadPool:
         #task = asyncio.current_task()
         #loop = task.get_loop()
         #context = task.get_context()
-    def __enter__(enter):
+    def __enter__(self):
         if self.idle:
             queue_set = self.idle.pop()
         else:
-            queue = queue.Queue()
-            return_queue = queue.Queue()
+            logger.debug("Creating new sync-worker thread")
+            queue = ThreadingQueue()
+            return_queue = ThreadingQueue()  # FIXME: maybe not needed
             thread = threading.Thread(target=_sync_worker, args=(queue, return_queue))
             queue_set = (thread, queue, return_queue)
             # TODO: arrange callback to kill thread on loop shutting_down:
@@ -150,8 +175,9 @@ def _sync_worker(queue, return_queue):
     """
     while True:
         sync_task_bundle = queue.get()
-        if sync_task is _poison:
+        if sync_task_bundle is _poison:
             return
+        context = sync_task_bundle.context
         try:
 
             result = context.run(_in_context_sync_worker, sync_task_bundle)
@@ -165,15 +191,29 @@ def _sync_worker(queue, return_queue):
         #return_queue.put((status, result))
 
 
-async def _sync_task_runner(func, args, kwargs):
+
+async def async_to_sync(
+    func: t.Callable[[...,], T],
+    args: t.Sequence[t.Any] = (),
+    kwargs: t.Mapping[str, t.Any | None] = None
+) -> t.Awaitable[T]:
+
+    logger.debug("Starting async_to_sync call to %s", func)
+
+    if kwargs is None:
+        kwargs = {}
+
     task = asyncio.current_task()
     loop = task.get_loop()
-    context = task.get_context()
+    context = task.get_context().copy()
+
     done_future = loop.create_future()
 
     with _ThreadPool as (_, queue, return_queue):
-        queue.put(_SyncTask(func, args, kwargs, loop, contextm, done_future))
+        logger.info((queue, return_queue))
+        queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
         #await done_future
+        logger.debug("Awaiting sync result from worker thread for %s", func)
         status, result = await done_future
 
     if status == _failure:
@@ -181,12 +221,3 @@ async def _sync_task_runner(func, args, kwargs):
     return result
 
 
-async def async_to_sync(
-    func: t.Callable[[...,], T],
-    args: t.Sequence[t.Any] = (),
-    kwargs: t.Mapping[str, t.Any | None] = None
-) -> t.Awaitable[T]:
-    if kwargs is None:
-        kwargs = {}
-
-    loop = asyncio.get_running_loop()
