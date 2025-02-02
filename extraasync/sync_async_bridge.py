@@ -87,13 +87,10 @@ def sync_to_async(
 
     loop = root_sync_task.loop
     context = root_sync_task.context
-    # FIXME: are events "cheap"? Should them be added to the pool, instead
-    # of creating one everytime?  (I guess it would be better)
     event = _ThreadPool.get(loop).all[threading.current_thread()].event
 
     event.clear()
-    task = None # strong reference to the task
-    #breakpoint()
+    task = None # Keep a strong reference to the task
     def do_it():
         nonlocal task
         logger.debug("Creating task in %s from %s", loop, threading.current_thread().name     )
@@ -107,7 +104,6 @@ def sync_to_async(
     if exc:=task.exception():
         raise exc
     return task.result()
-
 
 
 def _sync_to_async_non_bridge(
@@ -224,7 +220,7 @@ def async_to_sync(
     func: t.Callable[[...,], T],
     args: t.Sequence[t.Any] = (),
     kwargs: t.Mapping[str, t.Any | None] = None
-) -> t.Awaitable[T]:
+) -> asyncio.Future[T]:
     """Returns a future wrapping a synchronous call in other thread
 
     Most important: synchronous code called this way CAN RESUME
