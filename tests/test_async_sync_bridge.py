@@ -48,25 +48,37 @@ def test_async_sync_plain():
 def test_async_sync_bridge_1():
     done = done2 = done3 = False
 
+    # Useful for debugging
+    #async def heartbeat():
+        #counter = 0
+        #while True:
+            #await asyncio.sleep(1)
+            #print(counter, asyncio.all_tasks())
+            #counter += 1
+
     async def blah():
         nonlocal done
+        #print("@" * 100)
         await asyncio.sleep(0.01)
         done = True
 
     def bleh():
         nonlocal done2
+        #print("#" * 100)
         sync_to_async(blah)
         done2 = True
 
     async def blih():
         nonlocal done3
-        z = async_to_sync(bleh)
-        print(z)
-        await z
+        #t = asyncio.create_task(heartbeat())
+        #print("*" * 100)
+        await async_to_sync(bleh)
+        #t.cancel()
         done3 = True
 
     asyncio.run(blih())
     assert done and done and done3
+
 
 def test_async_sync_bridge_2():
     done = done2 = done3 = False

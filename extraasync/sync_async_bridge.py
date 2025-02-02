@@ -76,16 +76,16 @@ def sync_to_async(
     event = threading.Event()
     event.clear()
     task = None # strong reference to the task
+    #breakpoint()
     def do_it():
         nonlocal task
-        task = loop.create_task(func(*args, **kwargs), context=context)
+        logger.debug("Creating task in %s from %s", loop, threading.current_thread().name     )
+        task = loop.create_task(func(*args, **kwargs), context=context.copy())
         task.add_done_callback(lambda task, event=event: event.set())
 
     loop.call_soon_threadsafe(do_it)
     # Pauses sync-worker thread until original co-routine is finhsed in
     # the original event loop:
-    time.sleep(0.4)
-    assert task, "EEEEEEEEEEEKKKK"
     event.wait()
     if exc:=task.exception():
         raise exc
@@ -164,7 +164,9 @@ def _in_context_sync_worker(sync_task: _SyncTask):
 
     _context_bound_loop.set(sync_task)
     try:
+        logger.debug("Entering sync call in worker thread")
         result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
+        logger.debug("Returning from sync call in worker thread")
     finally:
         _context_bound_loop.set(None)
     return result
@@ -233,7 +235,7 @@ def async_to_sync(
         logger.info((queue, return_queue))
         queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
         #await done_future
-        logger.debug("Awaiting sync result from worker thread for %s", func)
+        logger.debug("Created future awaiting sync result from worker thread for %s", func)
 
     return done_future
 
