@@ -81,7 +81,7 @@ def test_async_sync_bridge_1():
         done3 = True
 
     asyncio.run(blih())
-    assert done and done and done3
+    assert done and done2 and done3
 
 
 def test_async_sync_bridge_2():
@@ -103,4 +103,36 @@ def test_async_sync_bridge_2():
         done3 = True
 
     sync_to_async(blih)
-    assert done and done and done3
+    assert done and done2 and done3
+
+def test_async_sync_bridge_depth2_chain_call():
+
+    done = done2 = done3 = done4 = done5 = False
+
+    async def blah():
+        nonlocal done
+        await asyncio.sleep(0.01)
+        done = True
+
+    def bleh():
+        nonlocal done2
+        sync_to_async(blah)
+        done2 = True
+
+    async def blih():
+        nonlocal done3
+        await async_to_sync(bleh)
+        done3 = True
+
+    def bloh():
+        nonlocal done4
+        sync_to_async(blih)
+        done4 = True
+
+    async def bluh():
+        nonlocal done5
+        await async_to_sync(bloh)
+        done5 = True
+
+    asyncio.run(bluh())
+    assert done and done2 and done3 and done4 and done5

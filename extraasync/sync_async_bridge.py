@@ -1,11 +1,12 @@
 import asyncio
 import contextvars
 import inspect
+import os
 import logging
-from queue import Queue as ThreadingQueue
 import threading
-
 import typing as t
+
+from queue import Queue as ThreadingQueue
 
 from .async_hooks import at_loop_stop_callback
 
@@ -15,21 +16,21 @@ __all__ = ["sync_to_async", "async_to_sync"]
 logger = logging.getLogger(__name__)
 #############################
 ### debugging logger boilerplate
-# Uncomment to ensure logger debug output
 
+if os.environ.get("EXTRAASYNC_DEBUG"):
 
-#logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)
 
-## Create a console handler and set its level to DEBUG
-#console_handler = logging.StreamHandler()
-#console_handler.setLevel(logging.DEBUG)
+    # Create a console handler and set its level to DEBUG
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
 
-## Create a formatter and attach it to the handler
-#formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-#console_handler.setFormatter(formatter)
+    # Create a formatter and attach it to the handler
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(formatter)
 
-## Attach the handler to the logger
-#logger.addHandler(console_handler)
+    # Attach the handler to the logger
+    logger.addHandler(console_handler)
 
 
 ###########################
@@ -81,7 +82,6 @@ def sync_to_async(
     if kwargs is None:
         kwargs = {}
     root_sync_task = _context_bound_loop.get()
-    #breakpoint()
     if not root_sync_task:
         return _sync_to_async_non_bridge(func, args, kwargs)
 
@@ -199,7 +199,7 @@ def _sync_worker(queue):
     """
     while True:
         sync_task_bundle = queue.get()
-        logger.debug("Got new sync call %s in worker-thread %s", sync_task_bundle, threading.current_thread().name)
+        logger.debug("*" * 100 + "Got new sync call %s in worker-thread %s", sync_task_bundle, threading.current_thread().name)
         if sync_task_bundle is _poison:
             logger.info("Stopping sync-worker thread %s", threading.current_thread().name)
             return
@@ -251,9 +251,20 @@ def async_to_sync(
 
     done_future = loop.create_future()
 
-    with _ThreadPool.get() as queue_set:
-        queue_set.queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
-        logger.debug("Created future awaiting sync result from worker thread for %s", func)
+    # Using the 'with' block to allocate a thread would return it
+    # to the pool before the future was done, triggering a dead lock
+    # if a new thread would be needed
+
+    thread_pool = _ThreadPool.get()
+    queue_set = thread_pool.__enter__()
+    done_future.add_done_callback(
+        lambda fut, thread_pool=thread_pool: thread_pool.__exit__(None, None, None)
+    )
+
+
+    #with _ThreadPool.get() as queue_set:
+    queue_set.queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
+    logger.debug("Created future awaiting sync result from worker thread for %s", func)
 
     return done_future
 
