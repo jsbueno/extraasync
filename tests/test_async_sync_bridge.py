@@ -46,6 +46,10 @@ def test_async_sync_plain():
 
 
 def test_async_sync_bridge_1():
+    # Debugging prints and helpers
+    # left on purpose. They might be needded
+    # when developping new features
+
     done = done2 = done3 = False
 
     # Useful for debugging

@@ -13,19 +13,19 @@ from .async_hooks import at_loop_stop_callback
 
 logger = logging.getLogger(__name__)
 #############################
-## debugging logger boilerplate
-logger.setLevel(logging.DEBUG)
+### debugging logger boilerplate
+#logger.setLevel(logging.DEBUG)
 
-# Create a console handler and set its level to DEBUG
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
+## Create a console handler and set its level to DEBUG
+#console_handler = logging.StreamHandler()
+#console_handler.setLevel(logging.DEBUG)
 
-# Create a formatter and attach it to the handler
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-console_handler.setFormatter(formatter)
+## Create a formatter and attach it to the handler
+#formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+#console_handler.setFormatter(formatter)
 
-# Attach the handler to the logger
-logger.addHandler(console_handler)
+## Attach the handler to the logger
+#logger.addHandler(console_handler)
 
 
 ###########################
@@ -112,10 +112,28 @@ def _sync_to_async_non_bridge(
     return loop.run_until_complete(coro)
 
 
+
 class _ThreadPool:
+    loop: asyncio.BaseEventLoop
+
+    pools = dict()
+
+    @classmethod
+    def get(cls, loop=None):
+        loop = asyncio.get_running_loop()
+        if loop not in cls.pools:
+            cls.pools[loop] = instance = _ThreadPool()
+            instance.loop = loop
+            at_loop_stop_callback(instance.close_threads, loop=loop)
+
+        return cls.pools[loop]
+
+
     def __init__(self):
         self.idle = set()
+        self.all = set()
         self.running = contextvars.ContextVar("running", default=())
+
 
         #task = asyncio.current_task()
         #loop = task.get_loop()
@@ -126,30 +144,39 @@ class _ThreadPool:
         else:
             logger.debug("Creating new sync-worker thread")
             queue = ThreadingQueue()
-            return_queue = ThreadingQueue()  # FIXME: maybe not needed
-            thread = threading.Thread(target=_sync_worker, args=(queue, return_queue))
-            queue_set = (thread, queue, return_queue)
-            # FIXME: arrange callback to kill thread on loop shutting_down:
-            # extraasync.at_loop_stop_callback(loop, lambda queue=queue: queue.put((_poison, None, None, None))
-            # (_ThreadPool must be made per-loop)
+            event = threading.Event()
+            thread = threading.Thread(target=_sync_worker, args=(queue,))
+            queue_set = _QueueSet(thread, queue, event)
             thread.start()
-        if (running := self.running.get()) == ():
-            self.running.set(running := [])
-        running.append(queue_set)
+            self.all.add(queue_set)
+        self.running.set(queue_set)
         return queue_set
 
     def __exit__(self, *exc_data):
-        queue_set = self.running.get().pop()
+        queue_set = self.running.get()
+        self.running.set(())
         self.idle.add(queue_set)
 
+    def close_threads(self):
+        for queue_set in self.all:
+            queue_set.queue.put(_poison)
+        self.all.clear()
+        self.idle.clear()
+        self.running.set(())
+
     def __repr__(self):
-        return f"<_ThreadPool with {len(self.idle)} idle  and {len(self.running.get())} threads>"
+        running = bool(self.running.get())
+        return f"<_ThreadPool with {len(self.all)} threads - with {len(self.all) - len(self.idle)} threads in use>"
 
-
-_ThreadPool = _ThreadPool()
 
 
 _poison = object()
+
+
+class _QueueSet(t.NamedTuple):
+    thread: threading.Thread
+    queue: ThreadingQueue
+    event: threading.Event
 
 class _SyncTask(t.NamedTuple):
     sync_task: t.Callable
@@ -172,7 +199,7 @@ def _in_context_sync_worker(sync_task: _SyncTask):
     return result
 
 
-def _sync_worker(queue, return_queue):
+def _sync_worker(queue):
     """Inner function to call sync "tasks" in a separate thread.
 
 
@@ -231,10 +258,8 @@ def async_to_sync(
 
     done_future = loop.create_future()
 
-    with _ThreadPool as (_, queue, return_queue):
-        logger.info((queue, return_queue))
-        queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
-        #await done_future
+    with _ThreadPool.get() as queue_set:
+        queue_set.queue.put(_SyncTask(func, args, kwargs, loop, context, done_future))
         logger.debug("Created future awaiting sync result from worker thread for %s", func)
 
     return done_future
