@@ -1,6 +1,8 @@
 import asyncio
 import contextvars
 import inspect
+import queue
+import threading
 
 import typing as t
 
@@ -12,6 +14,8 @@ _non_bridge_loop = contextvars.ContextVar("non_bridge_loop", default=None)
 _worker_threads = {}
 
 _context_bound_loop = contextvars.ContextVar("_context_bound_loop", default=None)
+_bridged_tasks = set()
+
 
 def sync_to_async(
     func: t.Callable[[...,], T] | t.Coroutine,
@@ -27,8 +31,9 @@ def sync_to_async(
     in a more efficient way than creating a new asyncio.loop at each call.
 
     When called from an asynchronous scenario, where a synchronous function was
-    previously called from an async context, this will allow the nested call to
-    happen in the context of the outermost loop, enabling the writting of
+    previously called from an async context **using the async_to_sync** call,
+    this will allow the nested call to
+    happen in the context of that original loop. This enables the creation of
     a single code path to both async and asynchronous contexts. In other words,
     and async function which calls a synchronous function by awaiting the "async_to_sync" counterpart to this function can have the synchronous function call back
     asynchronous contexts using this call. This is the so called "bridge mode" [WIP]
@@ -36,15 +41,29 @@ def sync_to_async(
 
     if kwargs is None:
         kwargs = {}
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if not loop:
+    root_sync_task = _context_bound_loop.get()
+    if not root_sync_task:
         return _sync_to_async_non_bridge(func, args, kwargs)
-    # TODO: fix this - it is the missing part!
-    task = _context_bound_loop.get().create_task(func, args, kwargs)
-    return NotImplementedError("Bridge mode is WIP")
+
+    loop = root_sync_task.loop
+    context = root_sync_task.context
+    # FIXME: are events "cheap"? Should them be added to the pool, instead
+    # of creating one everytime?  (I guess it would be better)
+    event = threading.Event()
+    event.clear()
+    task = None # strong reference to the task
+    def do_it():
+        nonlocal task
+        task = loop.create_task(func(args, kwargs), context=context)
+        task.add_done_callback(event.set)
+
+    loop.call_soon_threadsafe(do_it)
+    # Pauses sync-worker thread until original co-routine is finhsed in
+    # the original event loop:
+    event.wait()
+    if exc:=task.exception():
+        raise exc
+    return task.result()
 
 
 
@@ -116,8 +135,12 @@ class _SyncTask(t.NamedTuple):
 
 def _in_context_sync_worker(sync_task: _SyncTask):
 
-    _context_bound_loop.set(sync_task.loop)
-    return sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
+    _context_bound_loop.set(sync_task)
+    try:
+        result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
+    finally:
+        _context_bound_loop.set(None)
+    return result
 
 
 def _sync_worker(queue, return_queue):
