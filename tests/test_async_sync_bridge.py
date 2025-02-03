@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import threading
 import time
 
@@ -348,3 +349,61 @@ def test_async_sync_bridge_exceptions_bubble_out():
     assert done
 
 
+
+context_test = contextvars.ContextVar("context_test")
+
+def test_async_sync_bridge_receives_copy_of_the_calling_context():
+
+    context_matches_value = True
+
+    async def async_end(value):
+        await asyncio.sleep(0.01)
+        if value == context_test.get():
+            return value
+        return (value, context_test.get())
+
+    def sync_step(value):
+        nonlocal context_matches_value
+        if value != context_test.get():
+            context_matches_value = False
+        return sync_to_async(async_end, args=(value,))
+
+    async def trampoline(value):
+        context_test.set(value)
+        return await async_to_sync(sync_step, args=(value,))
+
+    async def async_entry():
+        return set(await asyncio.gather(*(trampoline(value) for value in (5, 23, 55, 3125))))
+
+
+    assert sync_to_async(async_entry) == {5, 23, 55, 3125}
+
+
+def test_async_sync_bridge_sync_steps_can_modify_context():
+
+    context_matches_value = True
+
+    async def async_end(value):
+        await asyncio.sleep(0.01)
+        if value == context_test.get():
+            return value
+        return (value, context_test.get())
+
+    def sync_step(value):
+        # This is what we are testing here:
+        # sync call, in other thread, sets context value visible back on async task!
+        context_test.set(value)
+
+        # delay to ensure calls take place in parallel.
+        time.sleep(0.02)
+        return sync_to_async(async_end, args=(value,))
+
+    async def trampoline(value):
+        context_test.set(value / 100)   # This should not be visible in other async end.
+        return await async_to_sync(sync_step, args=(value,))
+
+    async def async_entry():
+        return set(await asyncio.gather(*(trampoline(value) for value in (5, 23, 55, 3125))))
+
+
+    assert sync_to_async(async_entry) == {5, 23, 55, 3125}

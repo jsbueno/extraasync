@@ -120,10 +120,12 @@ async_to_sync
 ----------------------
 
 
-Returns a future wrapping a synchronous call in other thread
+Returns a future wrapping a synchronous call in other thread:
+    the synchronous code will run concurrently while the asynchronous
+    code keeps running, until the future returned is awaited.
 
-In a similar way to what `asyncio.loop.run_in_executor` do,
-but with improvements:
+This is similar to what `asyncio.loop.run_in_executor` do,
+but there are key differences:
 
 Most important: synchronous code called this way CAN RESUME
 calling async co-routines in the same loop down the
