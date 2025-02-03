@@ -99,16 +99,25 @@ def sync_to_async(
 
     event.clear()
     task = None # Keep a strong reference to the task
+    inner_exception = None
     def do_it():
-        nonlocal task
-        logger.debug("Creating task in %s from %s", loop, threading.current_thread().name     )
-        task = loop.create_task(coro, context=context.copy())
+        nonlocal task, inner_exception
+        logger.debug("Creating task in %s from %s", loop, thread_name:=threading.current_thread().name)
+        try:
+            task = loop.create_task(coro, context=context.copy())
+        except Exception as exc:
+            # abort if there is an error creating the task itself!
+            event.set()
+            inner_exception = exc
+            raise
         task.add_done_callback(lambda task, event=event: event.set())
 
     loop.call_soon_threadsafe(do_it)
     # Pauses sync-worker thread until original co-routine is finhsed in
     # the original event loop:
     event.wait()
+    if inner_exception:
+        raise inner_exception
     if exc:=task.exception():
         raise exc
     return task.result()
@@ -172,6 +181,7 @@ class _ThreadPool:
 
     def close_threads(self):
         for queue_set in self.all.values():
+            queue_set.event.set()  # unblocks eventually blocked threads
             queue_set.queue.put(_poison)
         self.all.clear()
         self.idle.clear()

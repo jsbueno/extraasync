@@ -167,3 +167,34 @@ def test_async_sync_bridge_depth_arbitrary(depth):
 
     asyncio.run(async_target(depth - 1))
     assert steps_done == depth
+
+
+def test_async_sync_bridge_stops_on_error():
+    # During development, a frequent error
+    # was having the executiong hanging when an
+    # inner sync_to_async call errored.
+
+    done = done2 = done3 = False
+    stalled = False
+
+    def bad_async_target():  # not a co-routine: should raise an inner exception
+        nonlocal done
+        done = True
+
+    def sync_step():
+        nonlocal done2
+        sync_to_async(bad_async_target)
+        done2 = True
+
+    async def async_entry():
+        nonlocal done3, stalled
+        try:
+            await asyncio.wait_for(async_to_sync(sync_step), timeout=0.05)
+        except TimeoutError:
+            stalled = "Async bridge call stalled on bad-awaitable passed: check 'do_it' nested function in 'sinc_to_async' call."
+        except TypeError:
+            done3 = True
+
+    asyncio.run(async_entry())
+    assert not stalled, stalled
+    assert done and done3
