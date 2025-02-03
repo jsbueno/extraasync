@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -106,6 +108,51 @@ def test_async_sync_bridge_2():
     assert done and done2 and done3
 
 
+def test_async_sync_bridge_return_values():
+
+    async def blah():
+        await asyncio.sleep(0.01)
+        return 23
+
+    def bleh():
+        return sync_to_async(blah)
+
+    async def blih():
+        return await async_to_sync(bleh)
+
+    assert sync_to_async(blih) == 23
+
+
+def test_async_sync_bridge_can_pass_positional_args():
+
+    async def blah(value):
+        await asyncio.sleep(0.01)
+        return value
+
+    def bleh(value):
+        return sync_to_async(blah, args=(value,))
+
+    async def blih(value):
+        return await async_to_sync(bleh, args=(value,))
+
+    assert sync_to_async(blih, args=(23,)) == 23
+
+
+def test_async_sync_bridge_can_pass_named_args():
+
+    async def blah(*, value):
+        await asyncio.sleep(0.01)
+        return value
+
+    def bleh(*, value):
+        return sync_to_async(blah, kwargs={"value": value})
+
+    async def blih(*, value):
+        return await async_to_sync(bleh, kwargs={"value": value})
+
+    assert sync_to_async(blih, kwargs={"value": 23}) == 23
+
+
 def test_async_sync_bridge_depth2_chain_call():
 
     done = done2 = done3 = done4 = done5 = False
@@ -142,7 +189,8 @@ def test_async_sync_bridge_depth2_chain_call():
 @pytest.mark.parametrize(["depth"], [
   (5,),
   (10,),
-  (20,)
+  (20,),
+  #(5000,),  # try it. You know you want to!
 ])
 def test_async_sync_bridge_depth_arbitrary(depth):
 
@@ -197,4 +245,106 @@ def test_async_sync_bridge_stops_on_error():
 
     asyncio.run(async_entry())
     assert not stalled, stalled
-    assert done and done3
+    assert done and not done2 and done3
+
+
+def test_async_sync_bridged_tasks_run_on_same_loop_and_same_thread():
+    done = done2 = done3 = False
+
+    inner_thread  = outer_thread = None
+    inner_loop = outer_loop = None
+
+    async def blah():
+        nonlocal done, inner_thread, inner_loop
+        inner_thread = threading.current_thread()
+        inner_loop = asyncio.get_running_loop()
+        await asyncio.sleep(0.01)
+        done = True
+
+    def bleh():
+        nonlocal done2
+        sync_to_async(blah)
+        done2 = True
+
+    async def blih():
+        nonlocal done3, outer_thread, outer_loop
+        await async_to_sync(bleh)
+
+        outer_thread = threading.current_thread()
+        outer_loop = asyncio.get_running_loop()
+
+        done3 = True
+
+    sync_to_async(blih)
+    assert done and done2 and done3
+    assert inner_thread is outer_thread
+    assert inner_loop is outer_loop
+
+
+def test_async_sync_concurrent_sync_tasks_run_on_different_threads():
+    n = 5
+
+    used_threads = set()
+    results = None
+
+    def sync_call():
+        time.sleep(0.02)
+        used_threads.add(threading.current_thread())
+        return 23
+
+    async def async_main():
+        nonlocal results
+        tasks = set()
+        for i in range(n):
+            tasks.add(async_to_sync(sync_call))
+        results = tuple(await asyncio.gather(*tasks))
+
+    sync_to_async(async_main)
+    assert results == (23,) * n
+    assert len(used_threads) == n
+
+
+def test_async_sync_sequential_sync_tasks_run_reuse_threads():
+    n = 5
+
+    used_threads = set()
+    results = None
+
+    def sync_call():
+        time.sleep(0.002)
+        used_threads.add(threading.current_thread())
+        return 23
+
+    async def async_main():
+        nonlocal results
+        tasks = set()
+        results = []
+        for i in range(n):
+            results.append(await async_to_sync(sync_call))
+
+    sync_to_async(async_main)
+    assert results == [23] * n
+    assert len(used_threads) == 1
+
+
+def test_async_sync_bridge_exceptions_bubble_out():
+    done = False
+
+    async def blah():
+        nonlocal done
+        await asyncio.sleep(0.01)
+        done = True
+        raise RuntimeError()
+
+    def bleh():
+        sync_to_async(blah)
+
+    async def blih():
+        await async_to_sync(bleh)
+
+    with pytest.raises(RuntimeError):
+        sync_to_async(blih)
+
+    assert done
+
+

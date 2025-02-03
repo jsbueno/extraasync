@@ -88,6 +88,33 @@ a single code path to both async and asynchronous contexts. In other words,
 and async function which calls a synchronous function by awaiting the "async_to_sync" counterpart to this function can have the synchronous function call back
 asynchronous contexts using this call. This is the so called "bridge mode"
 
+```python
+
+async def inner_async_function():
+    """Runs in the same thread and loop as 'async_entry' """
+    # await long async client API call
+    await asyncio.sleep(0.01)
+    return 23
+
+def synchronous_shared_code_path(backend):
+    if backend == "async":
+        result = sync_to_async(inner_async_function)
+    else:
+        ...
+        result = sync_call()
+
+    return result
+
+async def async_entry():
+    # runs in a transparently created thread:
+    result = await async_to_sync(synchronous_shared_code_path, kwargs={"backend": "async"}))
+
+result = sync_to_async(blih)  # can be used in place of `asyncio.run`:
+                        # for simple, non nested calls, the same
+                        # asyncio loop is reused across calls.
+assert result == 23
+
+```
 
 async_to_sync
 ----------------------
@@ -118,6 +145,7 @@ the executor call, the sync code will see an empty context.
 
 Returns a future that will contain the results of the synchronous call.
 
+(check example snippet on `sync_to_async` description, above)
 
 
 at_loop_stop_callback
