@@ -390,6 +390,7 @@ def test_async_sync_bridge_sync_steps_can_modify_context():
         return (value, context_test.get())
 
     def sync_step(value):
+
         # This is what we are testing here:
         # sync call, in other thread, sets context value visible back on async task!
         context_test.set(value)

@@ -94,7 +94,8 @@ def sync_to_async(
         return _sync_to_async_non_bridge(coro, args, kwargs)
 
     loop = root_sync_task.loop
-    context = root_sync_task.context
+    # context = root_sync_task.context
+    sync_thread_context_copy = contextvars.copy_context()
     event = _ThreadPool.get(loop).all[threading.current_thread()].event
 
     event.clear()
@@ -104,7 +105,7 @@ def sync_to_async(
         nonlocal task, inner_exception
         logger.debug("Creating task in %s from %s", loop, thread_name:=threading.current_thread().name)
         try:
-            task = loop.create_task(coro, context=context.copy())
+            task = loop.create_task(coro, context=sync_thread_context_copy)
         except Exception as exc:
             # abort if there is an error creating the task itself!
             event.set()
@@ -220,7 +221,7 @@ def _sync_worker(queue):
         loop = sync_task_bundle.loop
         fut = sync_task_bundle.done_future
         try:
-            result = context.run(_in_context_sync_worker, sync_task_bundle)
+            result = context.copy().run(_in_context_sync_worker, sync_task_bundle)
         except BaseException as exc:
             result = exc
             loop.call_soon_threadsafe(fut.set_exception, result)
@@ -260,7 +261,9 @@ def async_to_sync(
 
     task = asyncio.current_task()
     loop = task.get_loop()
-    context = task.get_context().copy()
+    context = task.get_context() # it is resposibility of those using the context to copy it!
+                                 # (also, with the "extracontext" package, there are
+                                 # tools to modify an existing context if needed
 
     done_future = loop.create_future()
 
