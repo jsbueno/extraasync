@@ -81,9 +81,17 @@ def sync_to_async(
 
     if kwargs is None:
         kwargs = {}
+
+    if inspect.iscoroutine(func):
+        if args or kwargs:
+            raise RuntimeError("Can't accept extra arguments for existing coroutine")
+        coro = func
+    else:
+        coro = func(*args, **kwargs)
+
     root_sync_task = _context_bound_loop.get()
     if not root_sync_task:
-        return _sync_to_async_non_bridge(func, args, kwargs)
+        return _sync_to_async_non_bridge(coro, args, kwargs)
 
     loop = root_sync_task.loop
     context = root_sync_task.context
@@ -94,7 +102,7 @@ def sync_to_async(
     def do_it():
         nonlocal task
         logger.debug("Creating task in %s from %s", loop, threading.current_thread().name     )
-        task = loop.create_task(func(*args, **kwargs), context=context.copy())
+        task = loop.create_task(coro, context=context.copy())
         task.add_done_callback(lambda task, event=event: event.set())
 
     loop.call_soon_threadsafe(do_it)
@@ -107,7 +115,7 @@ def sync_to_async(
 
 
 def _sync_to_async_non_bridge(
-    func: t.Callable[[...,], T] | t.Coroutine,
+    coro: t.Coroutine,
     args: t.Sequence[t.Any],
     kwargs: t.Mapping[str, t.Any]
 ) -> T:
@@ -116,12 +124,7 @@ def _sync_to_async_non_bridge(
         loop = asyncio.new_event_loop()
         _non_bridge_loop.set(loop)
 
-    if inspect.iscoroutine(func):
-        if args or kwargs:
-            raise RuntimeError("Can't accept extra arguments for existing coroutine")
-        coro = func
-    else:
-        coro = func(*args, **kwargs)
+
     return loop.run_until_complete(coro)
 
 
@@ -149,7 +152,6 @@ class _ThreadPool:
         self.running = contextvars.ContextVar("running", default=())
 
     def __enter__(self):
-        breakpoint()
         if self.idle:
             queue_set = self.idle.pop()
         else:

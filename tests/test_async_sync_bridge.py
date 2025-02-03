@@ -140,9 +140,9 @@ def test_async_sync_bridge_depth2_chain_call():
 
 
 @pytest.mark.parametrize(["depth"], [
-  (3,),
-  #(5,),
-  #(10,)
+  (5,),
+  (10,),
+  (20,)
 ])
 def test_async_sync_bridge_depth_arbitrary(depth):
 
@@ -150,7 +150,7 @@ def test_async_sync_bridge_depth_arbitrary(depth):
 
     async def async_target(depth):
         nonlocal steps_done
-        print("\nplim", depth)
+        # print("\nplim", depth)
         if depth == 0:
             await asyncio.sleep(0.01)
         else:
@@ -159,7 +159,7 @@ def test_async_sync_bridge_depth_arbitrary(depth):
 
     def sync_target(depth):
         nonlocal steps_done
-        print("\nplom", depth)
+        # print("\nplom", depth)
         if depth:
             sync_to_async(async_target(depth - 1))
         steps_done += 1
