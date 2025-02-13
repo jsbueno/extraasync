@@ -44,8 +44,17 @@ any exception is raised in any of the taskgroup tasks,
 all sibling incomplete tasks get cancelled immediatelly.
 
 With ExtraTaskGroup, all created tasks are run to completion,
-and any exceptions are bubbled up as ExceptionGroups on
-the host task.
+by default and any exceptions are bubbled up as ExceptionGroups on
+the host task. If the classic "cancel all other tasks" behavior
+is desired, the named argument `default_abort=True` can be
+passed when the group is created.
+
+ExtraTaskGroup will also optionally limit the number
+of concurrent tasks that are executed. If `max_concurrency` is given,
+tasks created with an inner `.create_task` call will be
+bounded by a Semaphore, meaning at most "max_concurrency" tasks
+will be running at the same time, and others will start running as the first
+ones are completed.
 
 ```python
 import asyncio
@@ -69,6 +78,9 @@ asyncio.run(main())
 
 
 ```
+
+new in 0.4: the max_concurrency and default_abort paramters
+
 
 sync_to_async
 ----------------------

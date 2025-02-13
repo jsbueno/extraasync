@@ -66,3 +66,30 @@ def test_package_warns_if_taskgroup_implementation_becomes_incompatible():
 
 
 
+@pytest.mark.parametrize(
+    ["max_tasks", "max_concurrency"],[
+        (2, 1),
+        (5, 1),
+        (5, 2),
+        (30, 10),
+])
+@pytest.mark.asyncio
+async def test_extrataskgroup_limits_concurrency(max_tasks, max_concurrency):
+    running = 0
+    max_running = 0
+    async def blah():
+        nonlocal max_running, running
+        running += 1
+        max_running = max(max_running, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return 23
+
+    tasks = set()
+
+    async with ExtraTaskGroup(max_concurrency=max_concurrency) as tg:
+        for _ in range(max_tasks):
+            tasks.add(tg.create_task(blah()))
+
+    assert all(task.result() == 23 for task in tasks)
+    assert max_running == max_concurrency
