@@ -26,7 +26,7 @@ async def paused_pulses(n, message="pulse", interval=0.1):
         yield message
 
 async def main():
-    for index, message in aenumerate(paused_pulses(5)):
+    async for index, message in aenumerate(paused_pulses(5)):
         print(index, message)
 
 asyncio.run(main())
