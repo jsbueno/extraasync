@@ -85,20 +85,31 @@ async def pipeline(
 
     async def _worker() -> None:
         while True:
-            index, item = await input_queue.get()
+
+            index, item, _ = await input_queue.get()
+
+            result = exception = None
+
             if item is input_terminator:
                 input_queue.task_done()
                 break
-            result: R | t.Awaitable[R]= func(item, *args, **kwargs)
-            if isinstance(result, t.Awaitable):
+            try:
+                result: R | t.Awaitable[R]= func(item, *args, **kwargs)
+            except Exception as exc:
+                exception = exc
+
+            if not exception and isinstance(result, t.Awaitable):
                 # cast in original code doesn't make sense:
                 # mapping callback must await to a "R" otherwise a typing error is justified.
                 # result = t.cast(R, await result)
-                result = await result
-            await output_queue.put((index, result))
+                try:
+                    result = await result
+                except Exception as exc:
+                    exception = exc
+            await output_queue.put((index, result, exception))
             input_queue.task_done()
 
-        await output_queue.put((-1, output_terminator))
+        await output_queue.put((-1, output_terminator, None))
 
 
     async def _feeder() -> None:
@@ -111,16 +122,16 @@ async def pipeline(
                 feeding_stop.clear()
 
             last_fed += 1
-            await input_queue.put((last_fed, item))
+            await input_queue.put((last_fed, item, None))
 
         for _ in range(max_concurrency):
-            await input_queue.put((-1, input_terminator))
+            await input_queue.put((-1, input_terminator, None))
 
     async def _consumer() -> t.AsyncIterable[R]:
         nonlocal next_to_yield
         remaining_workers = max_concurrency
         while remaining_workers:
-            index, result = await output_queue.get()
+            index, result, exception = await output_queue.get()
             if result is output_terminator:
                 remaining_workers -= 1
                 output_queue.task_done()

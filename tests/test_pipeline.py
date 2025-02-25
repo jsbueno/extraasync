@@ -58,5 +58,34 @@ async def test_pipeline_matches_desired_concurrency(interval, map_interval, max_
 
 
 
+@pytest.mark.asyncio
+async def test_pipeline_dont_stall_on_task_exception():
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    async def map_function(n):
+        raise RuntimeError()
+        return n * 2
+
+    results = []
+    try:
+        async with asyncio.timeout(0.1):
+            try:
+                async for result in Pipeline(producer(1), map_function):
+                    results.append(result)
+            except *Exception:
+                # for this specific test, any other outcome is good.
+                pass
+
+    except TimeoutError:
+        assert False, "Pipeline had stalled on inner task exception"
+
+    assert True
+
+
+
+
 
 
