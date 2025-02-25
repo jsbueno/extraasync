@@ -79,7 +79,7 @@ async def pipeline(
     input_queue = asyncio.Queue[tuple[int, T]](max_concurrency)
     output_queue = asyncio.Queue[tuple[int, R]](max_concurrency)
     feeding_stop = asyncio.Event()
-    last_fed = -1
+    last_fed_index = -1
     next_to_yield = 0
     early_results: dict[int, R] = {}
 
@@ -113,21 +113,35 @@ async def pipeline(
 
 
     async def _feeder() -> None:
-        nonlocal last_fed
-        async for item in _as_async_iterable(iterable):
+        nonlocal last_fed_index
+
+        source = _as_async_iterable(iterable)
+        while True:
+            exception = item = None
+            try:
+                item = await anext(source, input_terminator)
+            except Exception as exc:
+                # FIXME: maybe clean-up TB and exception info
+                # depending on running mode?
+                exception = exc
+
+            if item is input_terminator:
+                break
+
             if len(early_results) >= max_concurrency:
                 # There is an item that is taking very long to process. We need
                 # to wait for it to finish to avoid blowing up memory.
                 await feeding_stop.wait()
                 feeding_stop.clear()
 
-            last_fed += 1
-            await input_queue.put((last_fed, item, None))
+            last_fed_index += 1
+            await input_queue.put((last_fed_index, item, exception))
 
+        # TBD: there should be only one worker task.
         for _ in range(max_concurrency):
             await input_queue.put((-1, input_terminator, None))
 
-    async def _consumer() -> t.AsyncIterable[R]:
+    async def _re_orderer() -> t.AsyncIterable[R]:
         nonlocal next_to_yield
         remaining_workers = max_concurrency
         while remaining_workers:
@@ -137,7 +151,7 @@ async def pipeline(
                 output_queue.task_done()
                 continue
 
-            early_results[index] = result
+            early_results[index] = result if exception is None else exception
             while next_to_yield in early_results:
                 # The feeding lock is set only when the results can be yielded
                 # to prevent the early results from growing too much.
@@ -152,7 +166,7 @@ async def pipeline(
     ] + [asyncio.create_task(_feeder())]
 
     try:
-        async for result in _consumer():
+        async for result in _re_orderer():
             yield result
     finally:
         for task in tasks:
