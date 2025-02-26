@@ -83,32 +83,50 @@ async def pipeline(
     next_to_yield = 0
     early_results: dict[int, R] = {}
 
+    active_worker_tasks = set()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _work_step(item, index, *args, **kwargs):
+        result = exception = None
+        try:
+            result: R | t.Awaitable[R]= func(item, *args, **kwargs)
+        except Exception as exc:
+            exception = exc
+
+        if not exception and isinstance(result, t.Awaitable):
+            # cast in original code doesn't make sense:
+            # mapping callback must await to a "R" otherwise a typing error is justified.
+            # result = t.cast(R, await result)
+            try:
+                result = await result
+            except Exception as exc:
+                exception = exc
+        await output_queue.put((index, result, exception))
+        input_queue.task_done()
+        #return index, result, exception
+
+
     async def _worker() -> None:
         while True:
 
-            index, item, _ = await input_queue.get()
+            index, item, input_exception = await input_queue.get()
 
-            result = exception = None
-
-            if item is input_terminator:
+            if input_exception or item is input_terminator:
                 input_queue.task_done()
                 break
-            try:
-                result: R | t.Awaitable[R]= func(item, *args, **kwargs)
-            except Exception as exc:
-                exception = exc
 
-            if not exception and isinstance(result, t.Awaitable):
-                # cast in original code doesn't make sense:
-                # mapping callback must await to a "R" otherwise a typing error is justified.
-                # result = t.cast(R, await result)
-                try:
-                    result = await result
-                except Exception as exc:
-                    exception = exc
-            await output_queue.put((index, result, exception))
-            input_queue.task_done()
+            if await semaphore.acquire():
+                task = asyncio.create_task(_work_step(item, index, *args, **kwargs))
+                active_worker_tasks.add(task)
+                def cleanup(t):
+                    print(f"cleanng up {t}")
+                    worker_tasks.remove(t)
+                    semaphore.release()
+                    print(f"cleaned up {t}")
 
+                task.add_done_callback(lambda t: (active_worker_tasks.remove(t), semaphore.release()))
+
+        await asyncio.gather(*active_worker_tasks)
         await output_queue.put((-1, output_terminator, None))
 
 
@@ -143,13 +161,14 @@ async def pipeline(
 
     async def _re_orderer() -> t.AsyncIterable[R]:
         nonlocal next_to_yield
-        remaining_workers = max_concurrency
-        while remaining_workers:
+        finish = False
+        while True:
             index, result, exception = await output_queue.get()
             if result is output_terminator:
-                remaining_workers -= 1
                 output_queue.task_done()
-                continue
+                finish = True
+
+                return
 
             early_results[index] = result if exception is None else exception
             while next_to_yield in early_results:
@@ -161,18 +180,19 @@ async def pipeline(
                 next_to_yield += 1
             output_queue.task_done()
 
-    tasks = [
-        asyncio.create_task(_worker()) for _ in range(max_concurrency)
-    ] + [asyncio.create_task(_feeder())]
+    admin_tasks = {
+        asyncio.create_task(_worker()),
+        asyncio.create_task(_feeder())
+    }
 
     try:
         async for result in _re_orderer():
             yield result
     finally:
-        for task in tasks:
+        for task in admin_tasks:
             task.cancel()
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*admin_tasks, return_exceptions=True)
 
 
 Pipeline = pipeline
