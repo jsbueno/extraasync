@@ -24,7 +24,7 @@ async def pipeline(
     iterable: t.AsyncIterable[T] | t.Iterable[T],
     func: t.Callable[[T], R | t.Awaitable[R]],
     *args,
-    max_concurrency: int = 4,
+    max_concurrency: int = 0,
     **kwargs,
 ) -> t.AsyncIterable[R]:
     """
@@ -59,33 +59,36 @@ async def pipeline(
 
     Notes:
         - If the callback is synchronous, it will be invoked directly in the
-          event loop coroutine, so consider wrapping it with asyncio.to_thread()
-          if blocking is significant.
+        event loop coroutine, so consider wrapping it with asyncio.to_thread()
+        if blocking is significant.
         - This implementation uses internal queues to avoid reading from
-          `iterable` too far ahead, controlling memory usage.
+        `iterable` too far ahead, controlling memory usage.
         - Once an item finishes processing, its result is enqueued and will be
-          yielded as soon as all previous results have also been yielded.
+        yielded as soon as all previous results have also been yielded.
         - If the consumer of this async iterable stops consuming early, workers
-          may block while attempting to enqueue subsequent results. It is
-          recommended to cancel this coroutine in such case to clean up
-          resources if it is no longer needed.
+        may block while attempting to enqueue subsequent results. It is
+        recommended to cancel this coroutine in such case to clean up
+        resources if it is no longer needed.
         - If the work for some items is very slow, intermediate results are
-          accumulated in an internal buffer until those slow results become
-          available, preventing out-of-order yielding.
+        accumulated in an internal buffer until those slow results become
+        available, preventing out-of-order yielding.
     """
 
     input_terminator = t.cast(T, object())
     output_terminator = t.cast(R, object())
     input_queue = asyncio.Queue[tuple[int, T]](max_concurrency)
     output_queue = asyncio.Queue[tuple[int, R]](max_concurrency)
-    feeding_stop = asyncio.Event()
     last_fed_index = -1
     next_to_yield = 0
     early_results: dict[int, R] = {}
 
     active_worker_tasks = set()
-    semaphore = asyncio.Semaphore(max_concurrency)
-
+    if max_concurrency:
+        active_tasks_semaphore = asyncio.Semaphore(max_concurrency)
+        feeder_semaphore = asyncio.Semaphore(max_concurrency)
+    else:
+        active_tasks_semaphore = None
+        feeder_semaphore = None
     async def _work_step(item, index, *args, **kwargs):
         result = exception = None
         try:
@@ -115,16 +118,12 @@ async def pipeline(
                 input_queue.task_done()
                 break
 
-            if await semaphore.acquire():
+            if  active_tasks_semaphore is None or await active_tasks_semaphore.acquire():
+                await asyncio.sleep(0)
                 task = asyncio.create_task(_work_step(item, index, *args, **kwargs))
                 active_worker_tasks.add(task)
-                def cleanup(t):
-                    print(f"cleanng up {t}")
-                    worker_tasks.remove(t)
-                    semaphore.release()
-                    print(f"cleaned up {t}")
 
-                task.add_done_callback(lambda t: (active_worker_tasks.remove(t), semaphore.release()))
+                task.add_done_callback(lambda t: (active_worker_tasks.remove(t), active_tasks_semaphore and active_tasks_semaphore.release()))
 
         await asyncio.gather(*active_worker_tasks)
         await output_queue.put((-1, output_terminator, None))
@@ -136,6 +135,8 @@ async def pipeline(
         source = _as_async_iterable(iterable)
         while True:
             exception = item = None
+            if feeder_semaphore:
+                await feeder_semaphore.acquire()
             try:
                 item = await anext(source, input_terminator)
             except Exception as exc:
@@ -146,18 +147,10 @@ async def pipeline(
             if item is input_terminator:
                 break
 
-            if len(early_results) >= max_concurrency:
-                # There is an item that is taking very long to process. We need
-                # to wait for it to finish to avoid blowing up memory.
-                await feeding_stop.wait()
-                feeding_stop.clear()
-
             last_fed_index += 1
             await input_queue.put((last_fed_index, item, exception))
 
-        # TBD: there should be only one worker task.
-        for _ in range(max_concurrency):
-            await input_queue.put((-1, input_terminator, None))
+        await input_queue.put((-1, input_terminator, None))
 
     async def _re_orderer() -> t.AsyncIterable[R]:
         nonlocal next_to_yield
@@ -172,9 +165,9 @@ async def pipeline(
 
             early_results[index] = result if exception is None else exception
             while next_to_yield in early_results:
-                # The feeding lock is set only when the results can be yielded
-                # to prevent the early results from growing too much.
-                feeding_stop.set()
+
+                if feeder_semaphore:
+                    feeder_semaphore.release()
 
                 yield early_results.pop(next_to_yield)
                 next_to_yield += 1
