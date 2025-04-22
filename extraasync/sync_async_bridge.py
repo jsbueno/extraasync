@@ -222,9 +222,12 @@ def _in_context_sync_worker(sync_task: _SyncTask):
     _context_bound_task.set(sync_task)
     result = None
     try:
-        logger.debug("Entering sync call in worker thread")
-        result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
-        logger.debug("Returning from sync call in worker thread")
+        logger.debug("Entering sync call in worker thread %s", sync_task)
+        try:
+            result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
+        except Exception as exc:
+            logger.error("Exception in off-thread sync-task: %s", exc)
+        logger.debug("Returning from sync call in worker thread: %s", result)
     finally:
         _context_bound_task.set(None)
     return result
@@ -257,7 +260,8 @@ def _sync_worker(queue):
 
 
 def async_to_sync(
-    func: t.Callable[..., T],
+    func: t.Callable[[...,], T],
+    *,
     args: t.Sequence[t.Any] = (),
     kwargs: t.Optional[t.Mapping[str, t.Any | None]] = None,
 ) -> asyncio.Future[T]:
