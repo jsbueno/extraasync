@@ -206,7 +206,6 @@ async def test_pipeline_concurrency_limit_throtles_feeder(
     assert results == list(range(0, 2 * task_amount, 2))
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
 async def test_pipeline_dont_stall_on_task_exception():
     async def producer(n, interval=0):
@@ -222,7 +221,9 @@ async def test_pipeline_dont_stall_on_task_exception():
     try:
         async with asyncio.timeout(0.1):
             try:
-                async for result in Pipeline(producer(1), map_function):
+                async for result in Pipeline(
+                    map_function, data=producer(1), on_error="strict"
+                ):
                     results.append(result)
             except* Exception:
                 # for this specific test, any other outcome is good.
@@ -234,7 +235,6 @@ async def test_pipeline_dont_stall_on_task_exception():
     assert True
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
 async def test_pipeline_dont_stall_on_producer_exception():
     async def producer(n, interval=0):

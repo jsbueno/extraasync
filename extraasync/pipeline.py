@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: CC-PDM-1.0
 # author:   Martin Jurča, Joao S. O. Bueno
 import asyncio
+from functools import partial
+from logging import getLogger
 from inspect import isawaitable
 from itertools import chain
 from collections.abc import MutableSet
@@ -12,8 +14,16 @@ from .sync_async_bridge import async_to_sync
 
 import typing as t
 
+
+logger = getLogger(__name__)
+
 T = t.TypeVar("T")
 R = t.TypeVar("R")
+
+
+# sentinels:
+EOD = object()
+EXC_MARKER = object()
 
 
 class AutoSet(MutableSet):
@@ -70,18 +80,24 @@ class Stage:
     tasks = None
 
     def __init__(
-        self, code, max_concurrency: t.Optional[int] = None, preserve_order: bool = True, force_concurrency: bool = True
+        self,
+        code,
+        max_concurrency: t.Optional[int] = None,
+        preserve_order: bool = True,
+        force_concurrency: bool = True,
+        parent: "Pipeline" = None,
     ):
         """
-            Stage: intended to be used as part of a processing Pipeline
+        Stage: intended to be used as part of a processing Pipeline
 
-            ...
-            force_concurrency: will call synchronous functions using extraasync.sync_to_async in order to paralellize execution
-                even for synchronous stage code.
+        ...
+        force_concurrency: will call synchronous functions using extraasync.sync_to_async in order to paralellize execution
+            even for synchronous stage code.
         """
         self.code = code
         self.max_concurrency = max_concurrency
         self.preserve_order = preserve_order
+        self.parent = parent
         self.reset()
 
     def add_next_stage(self, next_):
@@ -94,19 +110,30 @@ class Stage:
         self.next = set()
         self.tasks = AutoSet()
 
+    def _collect_result(self, task, next_):
+        if not (exc := task.exception()):
+            next_(task.result())
+        # Hardcoded: exception - ignore.
+        logger.error("Exception in pipelined stage: %s", exc)
+        self.parent.output.put_nowait((EXC_MARKER, exc))
+
     def _create_task(self, value):
 
-        if inspect.iscoroutinefunction(self.code) or isinstance(self.code, type) and hasattr(self.code, "__await__"):
+        if (
+            inspect.iscoroutinefunction(self.code)
+            or isinstance(self.code, type)
+            and hasattr(self.code, "__await__")
+        ):
             task = asyncio.create_task(self.code(value))
         else:
             task = async_to_sync(self.code, args=(value,))
         for next_ in self.next:
             # task.add_done_callback(lambda task: (print(task, next_), next_(task.result()) ) )
-            task.add_done_callback(lambda task: next_(task.result()))
+            task.add_done_callback(partial(self._collect_result, next_=next_))
         task.add_done_callback(self.tasks.remove)
         return task
 
-    def put(self, value, ordering_tag = None):
+    def put(self, value, ordering_tag=None):
         # coroutines, awaitable classes:
 
         if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
@@ -114,24 +141,22 @@ class Stage:
         else:
             self.tasks.queue.put_nowait(lambda value=value: self._create_task(value))
 
-
     def __call__(self, value):
         "just run the stage"
         return self.code(value)
 
-EOD = object()
-
 
 class Pipeline:
     """
-        Pipeline class
-            Will enable mapping data from an iterator source to be passed down various stages
-            of execution, where the result of each estage is fed to the next one
+    Pipeline class
+        Will enable mapping data from an iterator source to be passed down various stages
+        of execution, where the result of each estage is fed to the next one
 
-            The difference for just calling one (or more) stages inline in a for function
-            that pipeline allows for fine grained concurrency specification and error handling
+        The difference for just calling one (or more) stages inline in a for function
+        that pipeline allows for fine grained concurrency specification and error handling
 
     """
+
     stages = None
 
     def __init__(
@@ -152,7 +177,11 @@ class Pipeline:
         self.stages = self.stages or []
         for stage in stages:
             if not isinstance(stage, Stage):
-                stage = Stage(stage, self.max_concurrency, self.preserve_order)
+                stage = Stage(
+                    stage, self.max_concurrency, self.preserve_order, parent=self
+                )
+            else:
+                stage.parent = self
             self.stages.append(stage)
         for i, stage in enumerate(reversed(self.stages)):
             if i == 0:
@@ -170,7 +199,6 @@ class Pipeline:
         """concatenates new iterable after current in process items"""
 
         # TBD
-
 
     async def __aiter__(self):
         inputing_data = True
@@ -196,9 +224,19 @@ class Pipeline:
                 pass
             else:
                 data_counter -= 1
+                if (
+                    isinstance(result_data, tuple)
+                    and result_data
+                    and result_data[0] is EXC_MARKER
+                ):
+                    if on_error == "ignore":
+                        pass
+                    elif on_error == "strict":
+                        raise result_data[1]
+                    elif on_error == "lazy":
+                        raise NotImplementedError("Lazy error raising in pipeline")
                 yield result_data
             await asyncio.sleep(0)
-
 
     async def results(self):
         return [r async for r in self]
