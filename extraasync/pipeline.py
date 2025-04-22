@@ -1,11 +1,54 @@
 # SPDX-License-Identifier: CC-PDM-1.0
-# author:   Martin Jurča
+# author:   Martin Jurča, Joao S. O. Bueno
 import asyncio
+from inspect import isawaitable
+from itertools import chain
+from collections.abc import MutableSet
+
+import inspect
+import queue
+
+from .sync_async_bridge import async_to_sync
 
 import typing as t
 
 T = t.TypeVar("T")
 R = t.TypeVar("R")
+
+
+class AutoSet(MutableSet):
+    """Set with an associated asyncio.Queue
+
+    WHenever an item is removed/discarded, an item is fetched from the queue as
+    a task factory - no argument callable: it is called and added to the set.
+
+
+    """
+
+    def __init__(self, initial=()):
+        self.data = set(initial)
+        self.queue = asyncio.Queue()
+
+    def __contains__(self, value):
+        return self.data.__contains__(value)
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def __len__(self):
+        return len(self.data)
+
+    def add(self, value):
+        self.data.add(value)
+
+    def discard(self, value):
+        self.data.discard(value)
+        try:
+            task_factory = self.queue.get_nowait()
+        except asyncio.queues.QueueEmpty:
+            return
+        self.add(task_factory())
+
 
 def _as_async_iterable(
     iterable: t.AsyncIterable[T] | t.Iterable[T],
@@ -20,172 +63,145 @@ def _as_async_iterable(
     return _sync_to_async_iterable()
 
 
-async def pipeline(
-    iterable: t.AsyncIterable[T] | t.Iterable[T],
-    func: t.Callable[[T], R | t.Awaitable[R]],
-    *args,
-    max_concurrency: int = 0,
-    **kwargs,
-) -> t.AsyncIterable[R]:
+PipelineErrors = t.Literal["strict", "ignore", "lazy_raise"]
+
+
+class Stage:
+    tasks = None
+
+    def __init__(
+        self, code, max_concurrency: t.Optional[int] = None, preserve_order: bool = True, force_concurrency: bool = True
+    ):
+        """
+            Stage: intended to be used as part of a processing Pipeline
+
+            ...
+            force_concurrency: will call synchronous functions using extraasync.sync_to_async in order to paralellize execution
+                even for synchronous stage code.
+        """
+        self.code = code
+        self.max_concurrency = max_concurrency
+        self.preserve_order = preserve_order
+        self.reset()
+
+    def add_next_stage(self, next_):
+        self.next.add(next_)
+
+    def reset(self):
+        if self.tasks:
+            for task in self.tasks:
+                task.cancel()
+        self.next = set()
+        self.tasks = AutoSet()
+
+    def _create_task(self, value):
+
+        if inspect.iscoroutinefunction(self.code) or isinstance(self.code, type) and hasattr(self.code, "__await__"):
+            task = asyncio.create_task(self.code(value))
+        else:
+            task = async_to_sync(self.code, args=(value,))
+        for next_ in self.next:
+            # task.add_done_callback(lambda task: (print(task, next_), next_(task.result()) ) )
+            task.add_done_callback(lambda task: next_(task.result()))
+        task.add_done_callback(self.tasks.remove)
+        return task
+
+    def put(self, value, ordering_tag = None):
+        # coroutines, awaitable classes:
+
+        if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
+            self.tasks.add(self._create_task(value))
+        else:
+            self.tasks.queue.put_nowait(lambda value=value: self._create_task(value))
+
+
+    def __call__(self, value):
+        "just run the stage"
+        return self.code(value)
+
+EOD = object()
+
+
+class Pipeline:
     """
-    Asynchronously map a function over an (a)synchronous iterable with bounded
-    parallelism.
+        Pipeline class
+            Will enable mapping data from an iterator source to be passed down various stages
+            of execution, where the result of each estage is fed to the next one
 
-    Allows concurrent processing of items from the given iterable, up to a
-    specified maximum concurrency level. Takes a function that can be either synchronous
-    (returning R) or asynchronous (returning Awaitable[R]) and returns an async
-    iterable producing results in input order as soon as they become available.
-    Internal queues are bounded, preventing consumption of the entire iterable
-    at once in memory.
+            The difference for just calling one (or more) stages inline in a for function
+            that pipeline allows for fine grained concurrency specification and error handling
 
-    Args:
-        iterable:
-            The source of items to process. Can be a synchronous or asynchronous
-            iterable.
-        func:
-            The mapping function to apply to each item. May be synchronous
-            (returning R) or asynchronous (returning Awaitable[R]). All *args
-            and **kwargs are forwarded to this function.
-        max_concurrency (int):
-            Maximum number of concurrent worker tasks. Defaults to 4.
-        *args:
-            Extra positional arguments passed on to `func`.
-        **kwargs:
-            Extra keyword arguments passed on to `func`.
-
-    Yields:
-        R: The result of applying `func` to each item, in the same order as
-        their corresponding inputs.
-
-    Notes:
-        - If the callback is synchronous, it will be invoked directly in the
-        event loop coroutine, so consider wrapping it with asyncio.to_thread()
-        if blocking is significant.
-        - This implementation uses internal queues to avoid reading from
-        `iterable` too far ahead, controlling memory usage.
-        - Once an item finishes processing, its result is enqueued and will be
-        yielded as soon as all previous results have also been yielded.
-        - If the consumer of this async iterable stops consuming early, workers
-        may block while attempting to enqueue subsequent results. It is
-        recommended to cancel this coroutine in such case to clean up
-        resources if it is no longer needed.
-        - If the work for some items is very slow, intermediate results are
-        accumulated in an internal buffer until those slow results become
-        available, preventing out-of-order yielding.
     """
+    stages = None
 
-    input_terminator = t.cast(T, object())
-    output_terminator = t.cast(R, object())
-    input_queue = asyncio.Queue[tuple[int, T]](max_concurrency)
-    output_queue = asyncio.Queue[tuple[int, R]](max_concurrency)
-    last_fed_index = -1
-    next_to_yield = 0
-    early_results: dict[int, R] = {}
+    def __init__(
+        self,
+        *stages: t.Sequence[t.Callable | Stage],
+        data: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
+        max_concurrency: t.Optional[int] = None,
+        on_error: PipelineErrors = "strict",
+        preserve_order: bool = True,
+    ):
+        self.max_concurrency = max_concurrency
+        self.data = _as_async_iterable(data)
+        self.preserve_order = preserve_order
+        self.raw_stages = stages
+        self.reset()
 
-    active_worker_tasks = set()
-    if max_concurrency:
-        active_tasks_semaphore = asyncio.Semaphore(max_concurrency)
-        feeder_semaphore = asyncio.Semaphore(max_concurrency)
-    else:
-        active_tasks_semaphore = None
-        feeder_semaphore = None
-    async def _work_step(item, index, *args, **kwargs):
-        result = exception = None
-        try:
-            result: R | t.Awaitable[R]= func(item, *args, **kwargs)
-        except Exception as exc:
-            exception = exc
+    def _create_stages(self, stages):
+        self.stages = self.stages or []
+        for stage in stages:
+            if not isinstance(stage, Stage):
+                stage = Stage(stage, self.max_concurrency, self.preserve_order)
+            self.stages.append(stage)
+        for i, stage in enumerate(reversed(self.stages)):
+            if i == 0:
+                next_stage = self.output.put_nowait
+            else:
+                next_stage = self.stages[-i].put
+            stage.add_next_stage(next_stage)
 
-        if not exception and isinstance(result, t.Awaitable):
-            # cast in original code doesn't make sense:
-            # mapping callback must await to a "R" otherwise a typing error is justified.
-            # result = t.cast(R, await result)
+    def reset(self):
+        self.output = asyncio.Queue()
+        self._create_stages(self.raw_stages)
+        self.count = 0
+
+    def chain_data(self, data_source):
+        """concatenates new iterable after current in process items"""
+
+        # TBD
+
+
+    async def __aiter__(self):
+        inputing_data = True
+        data_counter = 0
+        while inputing_data or data_counter:
+
+            if inputing_data:
+                try:
+                    item = await anext(self.data)
+                    data_counter += 1
+                except StopAsyncIteration:
+                    inputing_data = False
+            if not self.stages:
+                data_counter -= 1
+                yield item
+                continue
+            if inputing_data:
+                self.stages[0].put(item)
+
             try:
-                result = await result
-            except Exception as exc:
-                exception = exc
-        await output_queue.put((index, result, exception))
-        input_queue.task_done()
-        #return index, result, exception
+                result_data = self.output.get_nowait()
+            except asyncio.queues.QueueEmpty:
+                pass
+            else:
+                data_counter -= 1
+                yield result_data
+            await asyncio.sleep(0)
 
 
-    async def _worker() -> None:
-        while True:
+    async def results(self):
+        return [r async for r in self]
 
-            index, item, input_exception = await input_queue.get()
-
-            if input_exception or item is input_terminator:
-                input_queue.task_done()
-                break
-
-            if  active_tasks_semaphore is None or await active_tasks_semaphore.acquire():
-                await asyncio.sleep(0)
-                task = asyncio.create_task(_work_step(item, index, *args, **kwargs))
-                active_worker_tasks.add(task)
-
-                task.add_done_callback(lambda t: (active_worker_tasks.remove(t), active_tasks_semaphore and active_tasks_semaphore.release()))
-
-        await asyncio.gather(*active_worker_tasks)
-        await output_queue.put((-1, output_terminator, None))
-
-
-    async def _feeder() -> None:
-        nonlocal last_fed_index
-
-        source = _as_async_iterable(iterable)
-        while True:
-            exception = item = None
-            if feeder_semaphore:
-                await feeder_semaphore.acquire()
-            try:
-                item = await anext(source, input_terminator)
-            except Exception as exc:
-                # FIXME: maybe clean-up TB and exception info
-                # depending on running mode?
-                exception = exc
-
-            if item is input_terminator:
-                break
-
-            last_fed_index += 1
-            await input_queue.put((last_fed_index, item, exception))
-
-        await input_queue.put((-1, input_terminator, None))
-
-    async def _re_orderer() -> t.AsyncIterable[R]:
-        nonlocal next_to_yield
-        finish = False
-        while True:
-            index, result, exception = await output_queue.get()
-            if result is output_terminator:
-                output_queue.task_done()
-                finish = True
-
-                return
-
-            early_results[index] = result if exception is None else exception
-            while next_to_yield in early_results:
-
-                if feeder_semaphore:
-                    feeder_semaphore.release()
-
-                yield early_results.pop(next_to_yield)
-                next_to_yield += 1
-            output_queue.task_done()
-
-    admin_tasks = {
-        asyncio.create_task(_worker()),
-        asyncio.create_task(_feeder())
-    }
-
-    try:
-        async for result in _re_orderer():
-            yield result
-    finally:
-        for task in admin_tasks:
-            task.cancel()
-
-    await asyncio.gather(*admin_tasks, return_exceptions=True)
-
-
-Pipeline = pipeline
+    def __repr__(self):
+        return f"<{type(self).__name__}> stages:{self.stages}  bound data: {self.data}, delivered results: {self.count}>"
