@@ -223,10 +223,7 @@ def _in_context_sync_worker(sync_task: _SyncTask):
     result = None
     try:
         logger.debug("Entering sync call in worker thread %s", sync_task)
-        try:
-            result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
-        except Exception as exc:
-            logger.error("Exception in off-thread sync-task: %s", exc)
+        result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
         logger.debug("Returning from sync call in worker thread: %s", result)
     finally:
         _context_bound_task.set(None)
