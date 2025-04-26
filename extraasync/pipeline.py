@@ -8,6 +8,7 @@ from itertools import chain
 from collections.abc import MutableSet
 
 import inspect
+import heapq
 import queue
 
 from .sync_async_bridge import async_to_sync
@@ -25,6 +26,27 @@ R = t.TypeVar("R")
 EOD = object()
 EXC_MARKER = object()
 
+
+class Heap:
+    def __init__(self):
+        self.data = []
+
+    def peek(self) -> int | None:
+        if not self.data:
+            return None
+        return self.data[0][0]
+
+    def push(self, item: tuple[int, t.Any]):
+        heapq.heappush(self.data, item)
+
+    def pop(self):
+        return heapq.heappop(self.data)
+
+    def __bool__(self):
+        return bool(self.data)
+
+    def __repr__(self):
+        return f"<Heap {self.data!r}>"
 
 class AutoSet(MutableSet):
     """Set with an associated asyncio.Queue
@@ -112,13 +134,14 @@ class Stage:
 
     def _collect_result(self, task, next_):
         if not (exc := task.exception()):
-            next_(task.result())
+            return next_((task.order_tag, task.result()))
         # Hardcoded: exception - ignore.
         logger.error("Exception in pipelined stage: %s", exc)
         self.parent.output.put_nowait((EXC_MARKER, exc))
 
-    def _create_task(self, value):
+    def _create_task(self, value: tuple[int, t.Any]):
 
+        order_tag, value = value
         if (
             inspect.iscoroutinefunction(self.code)
             or isinstance(self.code, type)
@@ -127,13 +150,14 @@ class Stage:
             task = asyncio.create_task(self.code(value))
         else:
             task = async_to_sync(self.code, args=(value,))
+
+        task.order_tag = order_tag
         for next_ in self.next:
-            # task.add_done_callback(lambda task: (print(task, next_), next_(task.result()) ) )
             task.add_done_callback(partial(self._collect_result, next_=next_))
         task.add_done_callback(self.tasks.remove)
         return task
 
-    def put(self, value, ordering_tag=None):
+    def put(self, value: tuple[int, t.Any]):
         # coroutines, awaitable classes:
 
         if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
@@ -165,11 +189,15 @@ class Pipeline:
         data: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
         max_concurrency: t.Optional[int] = None,
         on_error: PipelineErrors = "strict",
-        preserve_order: bool = True,
+        preserve_order: bool = False,
+        max_simultaneous_records: t.Optional[int] = None,
     ):
         self.max_concurrency = max_concurrency
         self.data = _as_async_iterable(data)
         self.preserve_order = preserve_order
+        # TBD: maybe allow limitting total memory usage instead of elements in the pipeline?
+        self.max_simultaneous_records = max_simultaneous_records
+        self.on_error = on_error
         self.raw_stages = stages
         self.reset()
 
@@ -191,7 +219,8 @@ class Pipeline:
             stage.add_next_stage(next_stage)
 
     def reset(self):
-        self.output = asyncio.Queue()
+        self.ordered_results = Heap()
+        self.output: asyncio.Queue[tuple[int | EXC_MARKER], t.Any] = asyncio.Queue()
         self._create_stages(self.raw_stages)
         self.count = 0
 
@@ -201,41 +230,49 @@ class Pipeline:
         # TBD
 
     async def __aiter__(self):
+        order_marker: EXC_MARKER | int
         inputing_data = True
+        active_counter = 0
         data_counter = 0
-        while inputing_data or data_counter:
+        last_yielded_index = 0
+        while inputing_data or active_counter or self.ordered_results:
 
             if inputing_data:
                 try:
                     item = await anext(self.data)
+                    active_counter += 1
                     data_counter += 1
                 except StopAsyncIteration:
                     inputing_data = False
             if not self.stages:
-                data_counter -= 1
+                active_counter -= 1
                 yield item
                 continue
             if inputing_data:
-                self.stages[0].put(item)
+                self.stages[0].put((data_counter, item))
 
             try:
-                result_data = self.output.get_nowait()
+                order_marker, result_data = self.output.get_nowait()
             except asyncio.queues.QueueEmpty:
                 pass
             else:
-                data_counter -= 1
-                if (
-                    isinstance(result_data, tuple)
-                    and result_data
-                    and result_data[0] is EXC_MARKER
-                ):
-                    if on_error == "ignore":
-                        pass
-                    elif on_error == "strict":
+                active_counter -= 1
+                if order_marker is EXC_MARKER:
+                    if self.on_error == "ignore":
+                        await asyncio.sleep(0)
+                        continue
+                    elif self.on_error == "strict":
                         raise result_data[1]
-                    elif on_error == "lazy":
+                    elif self.on_error == "lazy":
                         raise NotImplementedError("Lazy error raising in pipeline")
+                if not self.preserve_order:
+                    yield result_data
+                else:
+                    self.ordered_results.push((order_marker, result_data))
+            if self.ordered_results.peek() == last_yielded_index + 1:
+                last_yielded_index, result_data = self.ordered_results.pop()
                 yield result_data
+
             await asyncio.sleep(0)
 
     async def results(self):
