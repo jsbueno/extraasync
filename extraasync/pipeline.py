@@ -26,6 +26,14 @@ R = t.TypeVar("R")
 EOD = object()
 EXC_MARKER = object()
 
+try:
+    from functools import Placeholder  # new in Python 3.14
+except ImportError:
+    # Pickleable sentinel:
+
+    class Placeholder:
+        pass
+
 
 class Heap:
     def __init__(self):
@@ -48,11 +56,12 @@ class Heap:
     def __repr__(self):
         return f"<Heap {self.data!r}>"
 
+
 class AutoSet(MutableSet):
     """Set with an associated asyncio.Queue
 
-    WHenever an item is removed/discarded, an item is fetched from the queue as
-    a task factory - no argument callable: it is called and added to the set.
+    Whenever an item is removed/discarded, an item is fetched from the queue as
+    a task factory-no argument callable: it is called and added to the set.
 
 
     """
@@ -169,6 +178,10 @@ class Stage:
         "just run the stage"
         return self.code(value)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}{self.code}"
+
+
 
 class Pipeline:
     """
@@ -185,32 +198,32 @@ class Pipeline:
 
     def __init__(
         self,
+        source: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
         *stages: t.Sequence[t.Callable | Stage],
-        data: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
         max_concurrency: t.Optional[int] = None,
         on_error: PipelineErrors = "strict",
         preserve_order: bool = False,
         max_simultaneous_records: t.Optional[int] = None,
     ):
-    """
-    Args:
-        - stages: One async or sync callable which will process one data item at a time
-            - TBD? accept generators as stages? (input data would be ".send"ed into it)
-        - data: async or sync generator representing the data source
-        - max_concurrency: Maximum number of concurrent tasks _for_ _each_ stage
-            (i.e. if there are 2 stages, and max_concurrency is set to 4, we may have
-            up to 8 concurrent tasks running at once in the pipeline, but each stage is
-            limited to 4)
-        - on_error: WHat to do if any stage raises an exeception - defaults to re-raise the
-                exception and stop the whole pipeline
-        - preserve_order: whether to yield the final results in the same order they were acquired from data.
-        - max_simultaneous_records: limit on amount of records to hold across all stages and input in internal
-            data structures: the idea is throtle data consumption in order to limit the
-            amount of memory used by the Pipeline
+        """
+        Args:
+            - stages: One async or sync callable which will process one data item at a time
+                - TBD? accept generators as stages? (input data would be ".send"ed into it)
+            - data: async or sync generator representing the data source
+            - max_concurrency: Maximum number of concurrent tasks _for_ _each_ stage
+                (i.e. if there are 2 stages, and max_concurrency is set to 4, we may have
+                up to 8 concurrent tasks running at once in the pipeline, but each stage is
+                limited to 4)
+            - on_error: WHat to do if any stage raises an exeception - defaults to re-raise the
+                    exception and stop the whole pipeline
+            - preserve_order: whether to yield the final results in the same order they were acquired from data.
+            - max_simultaneous_records: limit on amount of records to hold across all stages and input in internal
+                data structures: the idea is throtle data consumption in order to limit the
+                amount of memory used by the Pipeline
 
-    """
+        """
         self.max_concurrency = max_concurrency
-        self.data = _as_async_iterable(data)
+        self.data = _as_async_iterable(source) if source not in (None, Placeholder) else None
         self.preserve_order = preserve_order
         # TBD: maybe allow limitting total memory usage instead of elements in the pipeline?
         self.max_simultaneous_records = max_simultaneous_records
