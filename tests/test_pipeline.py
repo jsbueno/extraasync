@@ -21,7 +21,7 @@ async def test_pipeline_produces_results():
         return n * 2
 
     results = []
-    async for result in Pipeline(map_function, data=producer(10)):
+    async for result in Pipeline(producer(10), map_function):
         results.append(result)
 
     assert results == list(range(0, 20, 2))
@@ -38,7 +38,7 @@ async def test_pipeline_works_sync_stage():
         return n * 2
 
     results = []
-    async for result in Pipeline(map_function, data=producer(10)):
+    async for result in Pipeline(producer(10), map_function):
         results.append(result)
 
     assert results == list(range(0, 20, 2))
@@ -59,7 +59,7 @@ async def test_pipeline_2_stage():
         return v + 1
 
     results = []
-    async for result in Pipeline(map_function, f2, data=producer(10)):
+    async for result in Pipeline(producer(10), map_function, f2):
         results.append(result)
 
     assert results == [n * 2 + 1 for n in range(10)]
@@ -88,7 +88,7 @@ async def test_pipeline_stages_execute_conturrently():
 
     results = []
     async for result in Pipeline(
-        map_function, data=producer(task_amount), max_concurrency=None
+        producer(task_amount), map_function, max_concurrency=None
     ):
         results.append(result)
 
@@ -130,7 +130,7 @@ async def test_pipeline_matches_desired_concurrency(
 
     results = []
     async for result in Pipeline(
-        map_function, data=producer(task_amount), max_concurrency=max_concurrency
+        producer(task_amount), map_function, max_concurrency=max_concurrency
     ):
         results.append(result)
 
@@ -216,7 +216,9 @@ async def test_pipeline_keeps_order():
         await asyncio.sleep(int(f"{value:02d}"[::-1]) / 200)
         return value
 
-    assert await Pipeline(stage, data=generator(100), preserve_order=True).results() == list(range(100))
+    assert await Pipeline(generator(100), stage, preserve_order=True).results() == list(
+        range(100)
+    )
 
 
 @pytest.mark.asyncio
@@ -234,7 +236,9 @@ async def test_pipeline_dont_stall_on_task_exception():
     try:
         async with asyncio.timeout(0.1):
             try:
-                async for result in Pipeline(map_function, data=producer(1), on_error="strict"):
+                async for result in Pipeline(
+                    producer(1), map_function, on_error="strict"
+                ):
                     results.append(result)
             except* Exception:
                 # for this specific test, any other outcome is good.
@@ -276,51 +280,34 @@ async def test_pipeline_dont_stall_on_producer_exception():
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_reorder_results():
-    ...
-
-@pytest.mark.skip
-@pytest.mark.asyncio
-async def test_pipeline_add_stage_pipe_operator():
-
-    ...
-
+async def test_pipeline_reorder_results(): ...
 
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_add_data_and_execute_l_rhift_operator():
-
-    ...
+async def test_pipeline_add_stage_pipe_operator(): ...
 
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_store_result_r_rshift_operator():
-    ...
+async def test_pipeline_add_data_and_execute_l_rhift_operator(): ...
 
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_fine_tune_stages():
-    ...
+async def test_pipeline_store_result_r_rshift_operator(): ...
 
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_concurrency_rate_limit():
-    ...
+async def test_pipeline_fine_tune_stages(): ...
 
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_max_simultaneous_record_limit():
-    ...
+async def test_pipeline_concurrency_rate_limit(): ...
 
 
-
-
-
-
-
-
+@pytest.mark.skip
+@pytest.mark.asyncio
+async def test_pipeline_max_simultaneous_record_limit(): ...
