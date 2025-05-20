@@ -213,12 +213,28 @@ async def test_pipeline_keeps_order():
             yield i
 
     async def stage(value):
+        # ensure out of order results are yielded
         await asyncio.sleep(int(f"{value:02d}"[::-1]) / 200)
         return value
 
     assert await Pipeline(generator(100), stage, preserve_order=True).results() == list(
         range(100)
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_doesnt_keep_order():
+    async def generator(n):
+        for i in range(n):
+            yield i
+
+    async def stage(value):
+        # ensure out of order results are yielded
+        await asyncio.sleep(int(f"{value:02d}"[::-1]) / 200)
+        return value
+
+    result = await Pipeline(generator(100), stage, preserve_order=False).results()
+    assert sum(int(result[i] != i) for i in range(100)) > 10
 
 
 @pytest.mark.asyncio
@@ -280,7 +296,22 @@ async def test_pipeline_dont_stall_on_producer_exception():
 
 @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_pipeline_reorder_results(): ...
+async def test_pipeline_concurrency_rate_limit(): ...
+
+
+@pytest.mark.skip
+@pytest.mark.asyncio
+async def test_pipeline_max_simultaneous_record_limit(): ...
+
+
+@pytest.mark.skip
+@pytest.mark.asyncio
+async def test_pipeline_can_accept_source_from_rshift_op(): ...
+
+
+@pytest.mark.skip
+@pytest.mark.asyncio
+async def test_pipeline_can_chain_new_source_with_rshift_op(): ...
 
 
 @pytest.mark.skip
@@ -301,13 +332,3 @@ async def test_pipeline_store_result_r_rshift_operator(): ...
 @pytest.mark.skip
 @pytest.mark.asyncio
 async def test_pipeline_fine_tune_stages(): ...
-
-
-@pytest.mark.skip
-@pytest.mark.asyncio
-async def test_pipeline_concurrency_rate_limit(): ...
-
-
-@pytest.mark.skip
-@pytest.mark.asyncio
-async def test_pipeline_max_simultaneous_record_limit(): ...
