@@ -21,6 +21,24 @@ logger = getLogger(__name__)
 T = t.TypeVar("T")
 R = t.TypeVar("R")
 
+TIME_UNIT = t.Literal["second"] | t.Literal["minute"] | t.Literal["hour"] | t.Literal["day"]
+NUMBER = int | float
+
+
+def normalize_freq(value: NUMBER, unit: TIME_UNIT) -> float: # normalizes frequency to 'day'
+    match unit:
+        case "second":
+            value *= (60 * 60 * 24)
+        case "minute":
+            value *= (60 * 24)
+        case "hour":
+            value *= 24
+        case "day":
+            pass
+        case _:
+            raise ValueError(f"Invalid time unit for frequency throttle - should be one of {TIME_UNIT}")
+    return value
+
 
 # sentinels:
 EOD = object()
@@ -114,6 +132,8 @@ class Stage:
         self,
         code,
         max_concurrency: t.Optional[int] = None,
+        rate_limit: t.Optional[NUMBER] = None,
+        rate_limit_unit: TIME_UNIT = second,
         preserve_order: bool = True,
         force_concurrency: bool = True,
         parent: "Pipeline" = None,
@@ -127,9 +147,18 @@ class Stage:
         """
         self.code = code
         self.max_concurrency = max_concurrency
+        self.rate_limit = normalize_freq(rate_limit, rate_limit_unit) if rate_limit is not None else None
         self.preserve_order = preserve_order
         self.parent = parent
         self.reset()
+
+    @property
+    def rate_limit(self):
+        return self._rate_limit if self._rate_limit else self.parent.rate_limit
+
+    @rate_limit.setter
+    def rate_limit(self, value):
+        self._rate_limit = value
 
     def add_next_stage(self, next_):
         self.next.add(next_)
@@ -169,6 +198,8 @@ class Stage:
     def put(self, value: tuple[int, t.Any]):
         # coroutines, awaitable classes:
 
+        # TODO: add rate_limit considerations  here.
+
         if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
             self.tasks.add(self._create_task(value))
         else:
@@ -201,6 +232,8 @@ class Pipeline:
         source: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
         *stages: t.Sequence[t.Callable | Stage],
         max_concurrency: t.Optional[int] = None,
+        rate_limit: t.Optional[int] = None,
+        rate_limit_unit: T_TIME_UNIT = "second",
         on_error: PipelineErrors = "strict",
         preserve_order: bool = False,
         max_simultaneous_records: t.Optional[int] = None,
