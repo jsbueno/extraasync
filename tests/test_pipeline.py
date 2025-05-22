@@ -67,6 +67,93 @@ async def test_pipeline_works_with_custom_class_stage():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_awaiting_it_executes_it():
+    results = []
+
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    async def map_function(n, map_interval=0):
+        await asyncio.sleep(0)
+        results.append(n * 2)
+
+    ret_val = await Pipeline(producer(10), map_function)
+
+    assert ret_val is None
+    assert results == list(range(0, 20, 2))
+
+
+class _Acumulator:
+    def __init__(self, initial=()):
+        self.data = []
+        self.data.extend(initial)
+
+    def __rrshift__(self, other):
+        self.data.append(other)
+
+    def __eq__(self, other):
+        return self.data == other.data
+
+    def __repr__(self):
+        return f"Acumulator({self.data})"
+
+
+litlist = [0, 2, 4, 6, 8]
+litset = set(litlist)
+
+
+@pytest.mark.parametrize(
+    ["sink_instance", "expected"],
+    [
+        (None, None),
+        (
+            [],
+            litlist,
+        ),
+        (
+            set(),
+            litset,
+        ),
+        (_Acumulator(), _Acumulator(litlist)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pipeline_awaiting_fills_sink(sink_instance, expected):
+    results = []
+
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    async def map_function(n, map_interval=0):
+        await asyncio.sleep(0)
+        return n * 2
+
+    results = await Pipeline(producer(5), map_function, sink=sink_instance)
+
+    assert results == expected
+
+
+@pytest.mark.asyncio
+async def test_pipeline_call_results_process_everything():
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    async def map_function(n, map_interval=0):
+        await asyncio.sleep(0)
+        return n * 2
+
+    results = await Pipeline(producer(10), map_function).results()
+
+    assert results == list(range(0, 20, 2))
+
+
+@pytest.mark.asyncio
 async def test_pipeline_2_stages():
     async def producer(n, interval=0):
         for i in range(n):
