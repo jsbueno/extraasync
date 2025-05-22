@@ -316,10 +316,9 @@ async def test_pipeline_dont_stall_on_producer_exception():
     assert True
 
 
-
 @pytest.mark.asyncio
 async def test_pipeline_concurrency_rate_limit_single_stage():
-    rate_limit = 20 # /second
+    rate_limit = 20  # /second
     task_amount = 12
 
     async def producer(n, interval=0):
@@ -341,10 +340,8 @@ async def test_pipeline_concurrency_rate_limit_single_stage():
         results.append(result)
 
     elapsed = loop.time() - start_time
-    assert elapsed >= .5, "11 Tasks should take at least 0.5 seconds at 20/sec"
+    assert elapsed >= 0.5, "11 Tasks should take at least 0.5 seconds at 20/sec"
     assert set(results) == set(range(0, 2 * task_amount, 2))
-
-
 
 
 @pytest.mark.skip
@@ -424,9 +421,11 @@ async def test_rate_limiter_throtles_rate_if_called_concurrently():
     assert elapsed >= 0.5, "should be equal or greater than half second"
     assert elapsed <= 0.5 + threshold, "ellapsed time too long"
 
+
 @pytest.mark.asyncio
 async def test_rate_limiter_copyed_throtles_independently():
     from copy import copy
+
     loop = asyncio.get_running_loop()
     threshold = 0.02  # ~sys.getswitchinterval()
     limiter1 = RateLimiter(20, "second")

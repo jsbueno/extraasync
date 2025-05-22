@@ -139,8 +139,6 @@ class RateLimiter:
         self.last_resolved = 0
         self.pending = 0
 
-
-
     def __await__(self):
         loop = asyncio.get_running_loop()
 
@@ -154,7 +152,7 @@ class RateLimiter:
         remaining += (self.pending - self.last_resolved) * normalized
         self.pending += 1
 
-        if remaining  < 0:
+        if remaining < 0:
             self.last_reset = loop.time()
             yield None
             return
@@ -243,7 +241,6 @@ class Stage:
         # Hardcoded: exception - ignore.
         logger.error("Exception in pipelined stage: %s", exc)
         self.parent.output.put_nowait((EXC_MARKER, exc))
-
 
     def _create_task(self, value: tuple[int, t.Any]):
 
@@ -358,7 +355,11 @@ class Pipeline:
         for stage in stages:
             if not isinstance(stage, Stage):
                 stage = Stage(
-                    stage, max_concurrency=self.max_concurrency, preserve_order=self.preserve_order, parent=self, rate_limit=copy(self.rate_limiter)
+                    stage,
+                    max_concurrency=self.max_concurrency,
+                    preserve_order=self.preserve_order,
+                    parent=self,
+                    rate_limit=copy(self.rate_limiter),
                 )
             else:
                 stage.parent = self
