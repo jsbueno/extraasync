@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from extraasync import Pipeline
+from extraasync import Pipeline, RateLimiter
 
 
 @pytest.mark.asyncio
@@ -332,3 +332,26 @@ async def test_pipeline_store_result_r_rshift_operator(): ...
 @pytest.mark.skip
 @pytest.mark.asyncio
 async def test_pipeline_fine_tune_stages(): ...
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_starts_immediately():
+    loop = asyncio.get_running_loop()
+    threshold = 0.005  # ~sys.getswitchinterval()
+    limiter = RateLimiter(1)
+    start_time = loop.time()
+    await limiter
+    assert loop.time() - start_time < threshold
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_throtles_rate():
+    loop = asyncio.get_running_loop()
+    threshold = 0.005  # ~sys.getswitchinterval()
+    limiter = RateLimiter(20, "second")
+    start_time = loop.time()
+    for i in range(11):
+        await limiter
+    assert (
+        loop.time() - start_time >= 0.5
+    )  # should be equal or greater than half second

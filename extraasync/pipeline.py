@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: CC-PDM-1.0
+# SPDX-License-Identifier: LGPL-3.0+
 # author:   Martin Jurča, Joao S. O. Bueno
 import asyncio
 from functools import partial
@@ -6,6 +6,8 @@ from logging import getLogger
 from inspect import isawaitable
 from itertools import chain
 from collections.abc import MutableSet
+from numbers import Real as NReal  # for typing purposes
+from decimal import Decimal
 
 import inspect
 import heapq
@@ -15,29 +17,17 @@ from .sync_async_bridge import async_to_sync
 
 import typing as t
 
+# for some reason, decimal is not a subtype of real.
+Real = NReal | Decimal
 
 logger = getLogger(__name__)
 
 T = t.TypeVar("T")
 R = t.TypeVar("R")
 
-TIME_UNIT = t.Literal["second"] | t.Literal["minute"] | t.Literal["hour"] | t.Literal["day"]
-NUMBER = int | float
-
-
-def normalize_freq(value: NUMBER, unit: TIME_UNIT) -> float: # normalizes frequency to 'day'
-    match unit:
-        case "second":
-            value *= (60 * 60 * 24)
-        case "minute":
-            value *= (60 * 24)
-        case "hour":
-            value *= 24
-        case "day":
-            pass
-        case _:
-            raise ValueError(f"Invalid time unit for frequency throttle - should be one of {TIME_UNIT}")
-    return value
+TIME_UNIT = (
+    t.Literal["second"] | t.Literal["minute"] | t.Literal["hour"] | t.Literal["day"]
+)
 
 
 # sentinels:
@@ -112,6 +102,8 @@ class AutoSet(MutableSet):
 def _as_async_iterable(
     iterable: t.AsyncIterable[T] | t.Iterable[T],
 ) -> t.AsyncIterable[T]:
+    # author:   Martin Jurča
+    # License: CC-PDM-1.0
     if isinstance(iterable, t.AsyncIterable):
         return iterable
 
@@ -125,6 +117,71 @@ def _as_async_iterable(
 PipelineErrors = t.Literal["strict", "ignore", "lazy_raise"]
 
 
+class RateLimiter:
+    """Intended to limit rates for running a given Stage -
+
+    Use, for example, to respect the rate limit of
+    external APIs.
+
+    Just await the instance before executing each action that should be throttled.
+    """
+
+    # This is offset to a separate class so that it can be plugable
+    # (e.g. for  an off-process coordinated limiter)
+    def __init__(self, rate_limit: Real, unit: TIME_UNIT = "second"):
+        self.rate_limit = rate_limit
+        self.unit = unit
+        self.last_reset: None | float = None
+
+    def reset(self):
+        # self.event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        self.last_reset = loop.time()
+
+    def __await__(self):
+        loop = asyncio.get_running_loop()
+        if (
+            self.last_reset is None
+            or (remaining := self.normalized - (loop.time() - self.last_reset)) < 0
+        ):
+            yield None
+            self.reset()
+            return
+        fut = loop.create_future()
+        loop.call_later(remaining, lambda: fut.set_result(None))
+        yield from fut
+        self.reset()
+        return None
+
+    def __copy__(self):
+        instance = type(self)()
+        instance.__dict__.update(self.__dict__)
+        instance.last_reset = None
+        return instance
+
+    @property
+    def normalized(self):
+        """normalizes frequency to 'second'  and returns interval between calls"""
+        value = self.rate_limit
+        match self.unit:
+            case "second":
+                pass
+            case "minute":
+                value /= 60
+            case "hour":
+                value /= 3600
+            case "day":
+                value /= 24 * 3600
+            case _:
+                raise ValueError(
+                    f"Invalid time unit for frequency throtle - should be one of {TIME_UNIT}"
+                )
+        return 1 / value
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.rate_limit}, {self.unit})"
+
+
 class Stage:
     tasks = None
 
@@ -132,8 +189,8 @@ class Stage:
         self,
         code,
         max_concurrency: t.Optional[int] = None,
-        rate_limit: t.Optional[NUMBER] = None,
-        rate_limit_unit: TIME_UNIT = second,
+        rate_limit: None | RateLimiter = None,
+        rate_limit_unit: TIME_UNIT = "second",
         preserve_order: bool = True,
         force_concurrency: bool = True,
         parent: "Pipeline" = None,
@@ -147,18 +204,14 @@ class Stage:
         """
         self.code = code
         self.max_concurrency = max_concurrency
-        self.rate_limit = normalize_freq(rate_limit, rate_limit_unit) if rate_limit is not None else None
+        self.rate_limiter = (
+            rate_limit
+            if isinstance(rate_limit, RateLimiter)
+            else RateLimiter(rate_limit, rate_limit_unit) if rate_limit else None
+        )
         self.preserve_order = preserve_order
         self.parent = parent
         self.reset()
-
-    @property
-    def rate_limit(self):
-        return self._rate_limit if self._rate_limit else self.parent.rate_limit
-
-    @rate_limit.setter
-    def rate_limit(self, value):
-        self._rate_limit = value
 
     def add_next_stage(self, next_):
         self.next.add(next_)
@@ -213,7 +266,6 @@ class Stage:
         return f"{self.__class__.__name__}{self.code}"
 
 
-
 class Pipeline:
     """
     Pipeline class
@@ -232,8 +284,8 @@ class Pipeline:
         source: t.Optional[t.AsyncIterable[T] | t.Iterable[T]],
         *stages: t.Sequence[t.Callable | Stage],
         max_concurrency: t.Optional[int] = None,
-        rate_limit: t.Optional[int] = None,
-        rate_limit_unit: T_TIME_UNIT = "second",
+        rate_limit: None | RateLimiter | Real = None,
+        rate_limit_unit: TIME_UNIT = "second",
         on_error: PipelineErrors = "strict",
         preserve_order: bool = False,
         max_simultaneous_records: t.Optional[int] = None,
@@ -249,6 +301,11 @@ class Pipeline:
                 limited to 4)
             - on_error: WHat to do if any stage raises an exeception - defaults to re-raise the
                     exception and stop the whole pipeline
+            - rate_limit: An overall rate-limitting parameter which can be used to throtle all stages.
+                    If anyone stage should have a limit different from the limit to the whole pipeline,
+                    create it as an explicit Stage instance and configure the limiter there.
+            - rate_limit_unit: if rate_limit is given as a number, this states the time unit to be used in the rate limiting ratio.
+                                Not used otherwise.
             - preserve_order: whether to yield the final results in the same order they were acquired from data.
             - max_simultaneous_records: limit on amount of records to hold across all stages and input in internal
                 data structures: the idea is throtle data consumption in order to limit the
@@ -256,12 +313,19 @@ class Pipeline:
 
         """
         self.max_concurrency = max_concurrency
-        self.data = _as_async_iterable(source) if source not in (None, Placeholder) else None
+        self.data = (
+            _as_async_iterable(source) if source not in (None, Placeholder) else None
+        )
         self.preserve_order = preserve_order
         # TBD: maybe allow limitting total memory usage instead of elements in the pipeline?
         self.max_simultaneous_records = max_simultaneous_records
         self.on_error = on_error
         self.raw_stages = stages
+        self.rate_limiter = (
+            rate_limit
+            if isinstance(rate_limit, RateLimiter)
+            else RateLimiter(rate_limit, rate_limit_unit) if rate_limit else None
+        )
         self.reset()
 
     def _create_stages(self, stages):
