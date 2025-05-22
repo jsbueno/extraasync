@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0+
 # author:   Martin Jurča, Joao S. O. Bueno
 import asyncio
+from copy import copy
 from functools import partial
 from logging import getLogger
 from inspect import isawaitable
@@ -131,32 +132,44 @@ class RateLimiter:
     def __init__(self, rate_limit: Real, unit: TIME_UNIT = "second"):
         self.rate_limit = rate_limit
         self.unit = unit
-        self.last_reset: None | float = None
+        self.reset()
 
     def reset(self):
-        # self.event = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        self.last_reset = loop.time()
+        self.last_reset: None | float = None
+        self.last_resolved = 0
+        self.pending = 0
+
+
 
     def __await__(self):
         loop = asyncio.get_running_loop()
-        if (
-            self.last_reset is None
-            or (remaining := self.normalized - (loop.time() - self.last_reset)) < 0
-        ):
+
+        if self.last_reset is None:
+            self.last_reset = loop.time()
             yield None
-            self.reset()
             return
+
+        normalized = self.normalized
+        remaining = normalized - (loop.time() - self.last_reset)
+        remaining += (self.pending - self.last_resolved) * normalized
+        self.pending += 1
+
+        if remaining  < 0:
+            self.last_reset = loop.time()
+            yield None
+            return
+
         fut = loop.create_future()
         loop.call_later(remaining, lambda: fut.set_result(None))
         yield from fut
-        self.reset()
+        self.last_resolved += 1
+        self.last_reset = loop.time()
         return None
 
     def __copy__(self):
-        instance = type(self)()
+        instance = type(self).__new__(type(self))
         instance.__dict__.update(self.__dict__)
-        instance.last_reset = None
+        instance.reset()
         return instance
 
     @property
@@ -188,6 +201,7 @@ class Stage:
     def __init__(
         self,
         code,
+        *,
         max_concurrency: t.Optional[int] = None,
         rate_limit: None | RateLimiter = None,
         rate_limit_unit: TIME_UNIT = "second",
@@ -230,17 +244,31 @@ class Stage:
         logger.error("Exception in pipelined stage: %s", exc)
         self.parent.output.put_nowait((EXC_MARKER, exc))
 
+
     def _create_task(self, value: tuple[int, t.Any]):
 
         order_tag, value = value
+
+        async def rate_limited_async():
+            if self.rate_limiter:
+                await self.rate_limiter
+            return await self.code(value)
+
+        async def rate_limited_sync():
+            if self.rate_limiter:
+                await self.rate_limiter
+            return await async_to_sync(self.code, args=(value,))
+
         if (
             inspect.iscoroutinefunction(self.code)
             or isinstance(self.code, type)
             and hasattr(self.code, "__await__")
         ):
-            task = asyncio.create_task(self.code(value))
+            # wrapper in all cases because create_task won't work with classes having __await__
+            task = asyncio.create_task(rate_limited_async())
         else:
-            task = async_to_sync(self.code, args=(value,))
+            task = asyncio.create_task(rate_limited_sync())
+            # task = async_to_sync(self.code, args=(value,))
 
         task.order_tag = order_tag
         for next_ in self.next:
@@ -250,8 +278,6 @@ class Stage:
 
     def put(self, value: tuple[int, t.Any]):
         # coroutines, awaitable classes:
-
-        # TODO: add rate_limit considerations  here.
 
         if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
             self.tasks.add(self._create_task(value))
@@ -333,7 +359,7 @@ class Pipeline:
         for stage in stages:
             if not isinstance(stage, Stage):
                 stage = Stage(
-                    stage, self.max_concurrency, self.preserve_order, parent=self
+                    stage, max_concurrency=self.max_concurrency, preserve_order=self.preserve_order, parent=self, rate_limit=copy(self.rate_limiter)
                 )
             else:
                 stage.parent = self
