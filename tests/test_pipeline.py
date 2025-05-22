@@ -45,7 +45,29 @@ async def test_pipeline_works_sync_stage():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_2_stage():
+async def test_pipeline_works_with_custom_class_stage():
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    class Map:
+        def __init__(self, n, map_interval=0):
+            self.n = n
+
+        def __await__(self):
+            yield None
+            return self.n * 2
+
+    results = []
+    async for result in Pipeline(producer(10), Map):
+        results.append(result)
+
+    assert results == list(range(0, 20, 2))
+
+
+@pytest.mark.asyncio
+async def test_pipeline_2_stages():
     async def producer(n, interval=0):
         for i in range(n):
             yield i
@@ -399,5 +421,28 @@ async def test_rate_limiter_throtles_rate_if_called_concurrently():
     await asyncio.gather(*tasks)
 
     elapsed = loop.time() - start_time
+    assert elapsed >= 0.5, "should be equal or greater than half second"
+    assert elapsed <= 0.5 + threshold, "ellapsed time too long"
+
+@pytest.mark.asyncio
+async def test_rate_limiter_copyed_throtles_independently():
+    from copy import copy
+    loop = asyncio.get_running_loop()
+    threshold = 0.02  # ~sys.getswitchinterval()
+    limiter1 = RateLimiter(20, "second")
+    limiter2 = copy(limiter1)
+    start_time = loop.time()
+
+    async def limited_task(limiter):
+        await limiter
+        return None
+
+    tasks = set(asyncio.create_task(limited_task(limiter1)) for _ in range(11))
+    tasks.update(set(asyncio.create_task(limited_task(limiter2)) for _ in range(11)))
+    start_time = loop.time()
+    await asyncio.gather(*tasks)
+
+    elapsed = loop.time() - start_time
+    assert limiter2.rate_limit == limiter1.rate_limit
     assert elapsed >= 0.5, "should be equal or greater than half second"
     assert elapsed <= 0.5 + threshold, "ellapsed time too long"
