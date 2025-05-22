@@ -6,7 +6,7 @@ from functools import partial
 from logging import getLogger
 from inspect import isawaitable
 from itertools import chain
-from collections.abc import MutableSet
+from collections.abc import MutableSet, MutableSequence
 from numbers import Real as NReal  # for typing purposes
 from decimal import Decimal
 
@@ -42,6 +42,10 @@ except ImportError:
 
     class Placeholder:
         pass
+
+
+class SupportsRShift(t.Protocol):
+    def __rrshift__(self, other: t.Any) -> t.Any: ...
 
 
 class Heap:
@@ -311,6 +315,7 @@ class Pipeline:
         on_error: PipelineErrors = "strict",
         preserve_order: bool = False,
         max_simultaneous_records: t.Optional[int] = None,
+        sink: None | SupportsRShift | MutableSequence | MutableSet = None,
     ):
         """
         Args:
@@ -332,6 +337,7 @@ class Pipeline:
             - max_simultaneous_records: limit on amount of records to hold across all stages and input in internal
                 data structures: the idea is throtle data consumption in order to limit the
                 amount of memory used by the Pipeline
+            - sink: Instance which is loaded with the processed pipeline items if the Pipeline instance itself if awaited.
 
         """
         self.max_concurrency = max_concurrency
@@ -348,6 +354,7 @@ class Pipeline:
             if isinstance(rate_limit, RateLimiter)
             else RateLimiter(rate_limit, rate_limit_unit) if rate_limit else None
         )
+        self.sink = sink
         self.reset()
 
     def _create_stages(self, stages):
@@ -383,6 +390,15 @@ class Pipeline:
         # TBD
 
     async def __aiter__(self):
+        """Each iteration retrieves the next final result, after passing it trhough all teh stages
+
+        NB: calling this a single time will trigger the Pipeline background execution, and
+        more than one item can be (or will be) fectched  from source in a single iteration,
+        depending on concurrency configuration.
+
+        Over a call, a single final result is produced, but the machinery is started
+        and fed up with the data stages.
+        """
         order_marker: EXC_MARKER | int
         inputing_data = True
         active_counter = 0
@@ -428,7 +444,32 @@ class Pipeline:
 
             await asyncio.sleep(0)
 
+    def __await__(self):
+        """Process the stages for all items in source,
+        keep any results in the given pipeline "sink", if any,
+        and returns that.
+
+        """
+
+        async def process(self):
+
+            if hasattr(self.sink, "append"):
+                sink = self.sink.append
+            elif hasattr(self.sink, "add"):
+                sink = self.sink.add
+            elif hasattr(self.sink, "__rrshift__"):
+                sink = self.sink.__rrshift__
+            else:
+                sink = lambda *args: None
+
+            async for item in self:
+                sink(item)
+
+        yield from asyncio.create_task(process(self))
+        return self.sink
+
     async def results(self):
+        """Process the stages for all items in source, and returns the outputs of the last stage as a list"""
         return [r async for r in self]
 
     def __repr__(self):

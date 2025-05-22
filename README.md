@@ -182,3 +182,20 @@ remove_loop_stop_callback(handle, loop=None)
 
 This will simply cancel a previously registred callback
 for the current, or explicit loop.
+
+
+Pipeline
+----------------------------------
+One stop class to build a controlled asynchronous concurrent processing pipeline,
+featuring control over maximum concurrency, rate limits, exception control,
+retry logic and optional nice "pipelining syntax"
+
+Say, you want to fetch content from some 100's of external URLs, but capping
+the requests at 10 concurrent ones, extract and transform some data from the content,
+and output all that into an in-order CSV file? 
+
+Write out each step as a simple function (even a lambda), sync or async as
+is simpler, setup the Pipeline, and make a single call to have
+everything done.
+
+
