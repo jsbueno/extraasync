@@ -268,7 +268,6 @@ class Stage:
             task = asyncio.create_task(rate_limited_async())
         else:
             task = asyncio.create_task(rate_limited_sync())
-            # task = async_to_sync(self.code, args=(value,))
 
         task.order_tag = order_tag
         for next_ in self.next:
@@ -415,7 +414,7 @@ class Pipeline:
                         await asyncio.sleep(0)
                         continue
                     elif self.on_error == "strict":
-                        raise result_data[1]
+                        raise result_data
                     elif self.on_error == "lazy":
                         raise NotImplementedError("Lazy error raising in pipeline")
                 if not self.preserve_order:
