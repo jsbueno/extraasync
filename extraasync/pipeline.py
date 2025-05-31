@@ -119,7 +119,7 @@ def _as_async_iterable(
     return _sync_to_async_iterable()
 
 
-PipelineErrors = t.Literal["strict", "ignore", "lazy_raise"]
+PipelineErrors = t.Literal["eager", "ignore", "group"]
 
 
 class RateLimiter:
@@ -244,7 +244,7 @@ class Stage:
             return next_((task.order_tag, task.result()))
         # Hardcoded: exception - ignore.
         logger.error("Exception in pipelined stage: %s", exc)
-        self.parent.output.put_nowait((EXC_MARKER, exc))
+        self.parent.output.put_nowait((EXC_MARKER, (task.order_tag, exc)))
 
     def _create_task(self, value: tuple[int, t.Any]):
 
@@ -312,7 +312,7 @@ class Pipeline:
         max_concurrency: t.Optional[int] = None,
         rate_limit: None | RateLimiter | Real = None,
         rate_limit_unit: TIME_UNIT = "second",
-        on_error: PipelineErrors = "strict",
+        on_error: PipelineErrors = "eager",
         preserve_order: bool = False,
         max_simultaneous_records: t.Optional[int] = None,
         sink: None | SupportsRShift | MutableSequence | MutableSet = None,
@@ -326,7 +326,7 @@ class Pipeline:
                 (i.e. if there are 2 stages, and max_concurrency is set to 4, we may have
                 up to 8 concurrent tasks running at once in the pipeline, but each stage is
                 limited to 4)
-            - on_error: WHat to do if any stage raises an exeception - defaults to re-raise the
+            - on_error: WHat to do if any stage raises an exception - defaults to re-raise the
                     exception and stop the whole pipeline
             - rate_limit: An overall rate-limitting parameter which can be used to throtle all stages.
                     If anyone stage should have a limit different from the limit to the whole pipeline,
@@ -390,7 +390,7 @@ class Pipeline:
         # TBD
 
     async def __aiter__(self):
-        """Each iteration retrieves the next final result, after passing it trhough all teh stages
+        """Each iteration retrieves the next final result, after passing it trhough all the stages
 
         NB: calling this a single time will trigger the Pipeline background execution, and
         more than one item can be (or will be) fectched  from source in a single iteration,
@@ -429,9 +429,11 @@ class Pipeline:
                 if order_marker is EXC_MARKER:
                     if self.on_error == "ignore":
                         await asyncio.sleep(0)
+                        if self.preserve_order:
+                            self.ordered_results.push((result_data[0], EXC_MARKER))
                         continue
                     elif self.on_error == "strict":
-                        raise result_data
+                        raise result_data[1]
                     elif self.on_error == "lazy":
                         raise NotImplementedError("Lazy error raising in pipeline")
                 if not self.preserve_order:
@@ -440,7 +442,8 @@ class Pipeline:
                     self.ordered_results.push((order_marker, result_data))
             if self.ordered_results.peek() == last_yielded_index + 1:
                 last_yielded_index, result_data = self.ordered_results.pop()
-                yield result_data
+                if result_data is not EXC_MARKER:
+                    yield result_data
 
             await asyncio.sleep(0)
 

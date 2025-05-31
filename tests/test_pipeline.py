@@ -431,6 +431,92 @@ async def test_pipeline_concurrency_rate_limit_single_stage():
     assert set(results) == set(range(0, 2 * task_amount, 2))
 
 
+@pytest.mark.parametrize(
+    ["task_ammount", "failing_steps", "two_stages", "preserve_order"],
+    [
+        (
+            10,
+            {
+                5,
+            },
+            False,
+            True,
+        ),
+        (
+            10,
+            {
+                5,
+            },
+            True,
+            True,
+        ),
+        (
+            10,
+            {
+                5,
+            },
+            True,
+            False,
+        ),
+        (
+            10,
+            {
+                5,
+            },
+            False,
+            False,
+        ),
+        (10, {1, 3, 6, 9}, False, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pipeline_runs_to_completion_when_ignoring_exceptions(
+    task_ammount, failing_steps, two_stages, preserve_order
+):
+
+    async def producer(n, interval=0):
+        for i in range(n):
+            yield i
+            await asyncio.sleep(interval)
+
+    async def map_function(n):
+        if n in failing_steps:
+            raise ValueError()
+        await asyncio.sleep(0)
+        return n * 2
+
+    async def second_stage(n):
+        await asyncio.sleep(0)
+        return n
+
+    use_second_stage = (second_stage,) if two_stages else ()
+
+    results = []
+
+    try:
+        async with asyncio.timeout(0.1):
+            async for result in Pipeline(
+                producer(10),
+                map_function,
+                *use_second_stage,
+                preserve_order=preserve_order,
+                on_error="ignore",
+            ):
+                results.append(result)
+    except TimeoutError:
+
+        assert False, f"Timed out waiting pipeline to complete. Results: {results}"
+
+    expected = [
+        item * 2 for item in range(0, task_ammount) if item not in failing_steps
+    ]
+    if not preserve_order:
+        results = set(results)
+        expected = set(expected)
+
+    assert results == expected
+
+
 @pytest.mark.skip
 @pytest.mark.asyncio
 async def test_pipeline_max_simultaneous_record_limit(): ...
