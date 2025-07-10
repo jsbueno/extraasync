@@ -1,4 +1,10 @@
 class aenumerate:
+    """
+    Asynchronous version of enumerate:
+
+    can be used in async-for loops
+    """
+
     def __init__(self, iterable, start=None):
         self.iterable = iterable
         self.start = start or 0
@@ -19,4 +25,3 @@ class aenumerate:
 
     def __repr__(self):
         return f"Asynchronous enumeration for {self.iterable!r} at index {self.index!r}"
-

@@ -198,4 +198,34 @@ Write out each step as a simple function (even a lambda), sync or async as
 is simpler, setup the Pipeline, and make a single call to have
 everything done.
 
+```python
 
+from extraasync import Pipeline
+import httpx
+
+urls = ["https://example.com/data1", "https://example.com/data2", ...] # (X 100s) 
+
+async def fetch(url):
+    client = httpx.AsyncClient()
+    return (await client.get(url)).text
+
+async def extract(html):
+    return re.findall(r"\<h1\>(.+)?\<\/h1\>", html)
+
+async def record(msg):
+    with open("output.txt", "at") as f:
+        f.write(msg + "\n")
+        
+
+async def main():
+    await Pipeline(urls, fetch, extract, record, max_concurrency=30, rate_limit=10)
+
+
+# Or, the fancy style:
+
+from extraasync.pipeline import process
+
+async def fancy_main():
+    await (urls >> Pipeline(rate_limit=10) | fetch | extract | record)
+    
+```

@@ -7,4 +7,5 @@ from .pipeline import Pipeline, RateLimiter
 __version__ = "0.3.0"
 
 
-__all__ = ["aenumerate", "ExtraTaskGroup", "sync_to_async", "async_to_sync", "at_loop_stop_callback", "Pipeline", "remove_loop_stop_callback", "RateLimiter", "__version__"]
+__all__ = ["aenumerate", "ExtraTaskGroup", "sync_to_async", "async_to_sync",
+           "at_loop_stop_callback", "Pipeline", "remove_loop_stop_callback", "RateLimiter", "__version__"]
