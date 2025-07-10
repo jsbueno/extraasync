@@ -76,7 +76,6 @@ class AutoSet(MutableSet):
     Whenever an item is removed/discarded, an item is fetched from the queue as
     a task factory-no argument callable: it is called and added to the set.
 
-
     """
 
     def __init__(self, initial=()):
@@ -189,7 +188,8 @@ class RateLimiter:
                 value /= 24 * 3600
             case _:
                 raise ValueError(
-                    f"Invalid time unit for frequency throtle - should be one of {TIME_UNIT}"
+                    f"Invalid time unit for frequency throtle - should be one of {
+                        TIME_UNIT}"
                 )
         return 1 / value
 
@@ -282,7 +282,8 @@ class Stage:
         if self.max_concurrency in (None, 0) or len(self.tasks) < self.max_concurrency:
             self.tasks.add(self._create_task(value))
         else:
-            self.tasks.queue.put_nowait(lambda value=value: self._create_task(value))
+            self.tasks.queue.put_nowait(
+                lambda value=value: self._create_task(value))
 
     def __call__(self, value):
         "just run the stage"
@@ -342,7 +343,8 @@ class Pipeline:
         """
         self.max_concurrency = max_concurrency
         self.data = (
-            _as_async_iterable(source) if source not in (None, Placeholder) else None
+            _as_async_iterable(source) if source not in (
+                None, Placeholder) else None
         )
         self.preserve_order = preserve_order
         # TBD: maybe allow limitting total memory usage instead of elements in the pipeline?
@@ -380,7 +382,8 @@ class Pipeline:
 
     def reset(self):
         self.ordered_results = Heap()
-        self.output: asyncio.Queue[tuple[int | EXC_MARKER], t.Any] = asyncio.Queue()
+        self.output: asyncio.Queue[tuple[int |
+                                         EXC_MARKER], t.Any] = asyncio.Queue()
         self._create_stages(self.raw_stages)
         self.count = 0
 
@@ -435,7 +438,8 @@ class Pipeline:
                     elif self.on_error == "strict":
                         raise result_data[1]
                     elif self.on_error == "lazy":
-                        raise NotImplementedError("Lazy error raising in pipeline")
+                        raise NotImplementedError(
+                            "Lazy error raising in pipeline")
                 if not self.preserve_order:
                     yield result_data
                 else:
