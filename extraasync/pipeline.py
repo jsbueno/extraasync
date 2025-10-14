@@ -393,7 +393,7 @@ class Pipeline:
         # TBD
 
     async def __aiter__(self):
-        """Each iteration retrieves the next final result, after passing it trhough all the stages
+        """Each iteration retrieves the next final result, after passing it through all the stages
 
         NB: calling this a single time will trigger the Pipeline background execution, and
         more than one item can be (or will be) fectched  from source in a single iteration,
