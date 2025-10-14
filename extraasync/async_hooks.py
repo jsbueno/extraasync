@@ -158,14 +158,16 @@ def at_loop_stop_callback(
                 cb()
             except Exception as exc:
                 if not DEBUG:
-                    warnings.warn(f"""\
+                    warnings.warn(
+                        f"""\
                         Supressed Exception raised on loop callback {cb.__name__}:
                             {exc}
 
                         set extraasync.async_hooks.DEBUG to True
                         to have it raised instead.
 
-                    """)
+                    """
+                    )
                 else:
                     raise exc
         original_clean_up()
