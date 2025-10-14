@@ -1,6 +1,8 @@
 import asyncio
-
 import warnings
+import typing as t
+
+from asyncio.events import AbstractEventLoop
 
 
 DEBUG = False
@@ -14,10 +16,23 @@ if not hasattr(asyncio.BaseEventLoop, "_run_forever_cleanup"):
     )
 
 
+type LoopFinalizerHandle = int
 
+class FunctionWithHookMapping(t.Protocol):
+    def __call__(self, *args, **kwargs) -> t.Any: ...
+
+    hooks: dict[LoopFinalizerHandle, t.Callable[[], t.Any]]
+
+
+class LoopWithFinalizer(t.Protocol):
+    _run_forever_cleanup: t.Callable[[], None]
+
+
+# Registry for all finalizer functions in event-loops which use this helper:
 _loop_cleanuppers = {}
 
-def at_loop_stop_callback(callback, loop=None):
+
+def at_loop_stop_callback(callback: t.Callable[[], t.Any], loop: t.Optional[AbstractEventLoop]=None) -> LoopFinalizerHandle:
     """Schedules a callback to when the asyncio loop is stopping
 
     The callback is called without any parameters
@@ -36,7 +51,9 @@ def at_loop_stop_callback(callback, loop=None):
     if loop is None:
         loop = asyncio.get_running_loop()
 
-    original_clean_up = loop._run_forever_cleanup
+    loop_ = t.cast(LoopWithFinalizer, loop)
+
+    original_clean_up = loop_._run_forever_cleanup  # pyright: ignore[reportAttributeAccessIssue]
     def new_run_forever_cleanup():
         for handle, cb in cleanup_func.hooks.items():
             try:
@@ -53,21 +70,22 @@ def at_loop_stop_callback(callback, loop=None):
                     """)
                 else:
                     raise exc
-
-
         original_clean_up()
+
+    new_run_forever_cleanup = t.cast(FunctionWithHookMapping, new_run_forever_cleanup)
+
     if loop not in _loop_cleanuppers:
         new_run_forever_cleanup.hooks = {}
         _loop_cleanuppers[loop] = new_run_forever_cleanup
-        loop._run_forever_cleanup = new_run_forever_cleanup
+        loop_._run_forever_cleanup = new_run_forever_cleanup
 
     cleanup_func = _loop_cleanuppers[loop]
     new_cb_key = max((key for key in cleanup_func.hooks.keys() if isinstance(key, int)), default=0) + 1
-    cleanup_func.hooks[new_cb_key] = callback
+    cleanup_func.hooks[t.cast(LoopFinalizerHandle, new_cb_key)] = callback
     return new_cb_key
 
 
-def remove_loop_stop_callback(handle, loop=None):
+def remove_loop_stop_callback(handle: LoopFinalizerHandle, loop: t.Optional[AbstractEventLoop]=None) -> None:
     """Removes a scheduled callback for when the loop stops.
 
     If the handle or loop doesn't exist, simply errors out.
