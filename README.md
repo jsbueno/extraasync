@@ -47,6 +47,31 @@ With ExtraTaskGroup, all created tasks are run to completion,
 and any exceptions are bubbled up as ExceptionGroups on
 the host task.
 
+It is not that extraasync dislikes the idea of 
+structured concurrency by Nataniel Smith's Trio - 
+if a child task does fail, the taskgroup will still
+wait for all others to finish before propagating that error: 
+it just won't cancel the siblings, and allow then to run to 
+conclusion! (check https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/#what-is-a-goto-statement-anyway to learn more)
+
+Just put the `async with ExtraTaskGroup():` statement
+inside a try except block, to catch, as an exception group,
+all exceptions that were raised in that block's tasks.
+
+The one reason I believe Nataniel opted for
+cancelling siblings by default is that
+for _long_term_ nuseries, like a server
+which will spawn tasks for handling clients,
+the exception and traceback objects will pile
+up, and that would be a resource leak - please,
+use some fine-grained, in task, error handling for
+anything other than "a bunch of tasks, and alright if some fail".
+(Nataniel's trio has the concept of retrying groups - those
+might come in the future as other constructs to extraasync  -
+the differentiak to Trio is that extraasync will remain
+compatible with Python stdlib's asyncio)
+
+
 ```python
 import asyncio
 
