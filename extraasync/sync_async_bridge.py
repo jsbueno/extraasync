@@ -7,6 +7,7 @@ import threading
 import typing as t
 
 from queue import Queue as ThreadingQueue
+from textwrap import dedent as D
 
 from .async_hooks import at_loop_stop_callback
 
@@ -84,7 +85,7 @@ def sync_to_async(
 
     if inspect.iscoroutine(func):
         if args or kwargs:
-            raise RuntimeError("Can't accept extra arguments for existing coroutine")
+            raise TypeError("Can't accept extra arguments for existing coroutine")
         coro = func
     else:
         coro = func(*args, **kwargs)
@@ -131,7 +132,14 @@ def _sync_to_async_non_bridge(
 ) -> T:
     loop = _non_bridge_loop.get()
     if not loop:
-        loop = asyncio.new_event_loop()
+        try:
+            loop = asyncio.new_event_loop()
+        except RuntimeError:
+            raise RuntimeError(D("""\
+                Error trying to create a new async loop - to be able to call 'sync_to_async' from
+                code inside a running async loop, the parent 'sync execution branch' must be called
+                with `extraasync.async_to_sync`.
+            """))
         _non_bridge_loop.set(loop)
 
 
