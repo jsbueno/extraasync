@@ -1,8 +1,13 @@
 import asyncio
+
 import threading
 import typing as t
 import sys
+
 import warnings
+import typing as t
+
+from asyncio.events import AbstractEventLoop
 
 from asyncio import events
 from asyncio.events import AbstractEventLoop
@@ -145,7 +150,7 @@ def at_loop_stop_callback(
 
     loop_ = t.cast(LoopWithFinalizer, loop)
 
-    original_clean_up = loop_._run_forever_cleanup
+    original_clean_up = loop_._run_forever_cleanup  # pyright: ignore[reportAttributeAccessIssue]
 
     def new_run_forever_cleanup():
         for handle, cb in cleanup_func.hooks.items():
