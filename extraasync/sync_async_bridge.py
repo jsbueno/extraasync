@@ -157,7 +157,8 @@ def _sync_to_async_non_bridge(
                 Error trying to create a new async loop - to be able to call 'sync_to_async' from
                 code inside a running async loop, the parent 'sync execution branch' must be called
                 with `extraasync.async_to_sync`.
-                """))
+
+            """))
         _non_bridge_loop.set(loop)
 
     return loop.run_until_complete(coro)
@@ -255,7 +256,7 @@ def _sync_worker(queue):
         else:
             loop.call_soon_threadsafe(fut.set_result, result)
 
-
+#
 def async_to_sync(
     func: t.Callable[[...,], T],
     *,
