@@ -132,7 +132,7 @@ def sync_to_async(
     # Pauses sync-worker thread until original co-routine is finhsed in
     # the original event loop:
     event.wait()
-    if task is None:
+    if task is None and inner_exception is None:
         # should be unreachable - but this check keeps the linters quiet!
         raise RuntimeError("SyncToAsync error: assynchronous code not executed")
     if inner_exception:
