@@ -158,7 +158,7 @@ def _sync_to_async_non_bridge(
                 Error trying to create a new async loop - to be able to call 'sync_to_async' from
                 code inside a running async loop, the parent 'sync execution branch' must be called
                 with `extraasync.async_to_sync`.
-            """
+                """
                 )
             )
         _non_bridge_loop.set(loop)
@@ -222,8 +222,8 @@ class _ThreadPool:
 
 
 def _in_context_sync_worker(sync_task: _SyncTask):
-
     _context_bound_task.set(sync_task)
+    result = None
     try:
         logger.debug("Entering sync call in worker thread")
         result = sync_task.sync_task(*sync_task.args, **sync_task.kwargs)
@@ -284,7 +284,6 @@ def async_to_sync(
     Returns a future that will contain the results of the synchronous call
     """
     logger.debug("Starting async_to_sync call to %s", func)
-
     if kwargs is None:
         kwargs = {}
 
