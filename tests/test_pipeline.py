@@ -250,15 +250,15 @@ async def test_pipeline_matches_desired_concurrency(
         assert max_concurrent_tasks == task_amount
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.parametrize(
     ["task_amount", "interval", "map_interval", "max_concurrency"],
     [
         (5, 0, 0.1, 1),
-        (10, 0, 0.025, 4),
-        (10, 0, 0.025, 2),
-        (10, 0, 0.025, 8),
-        (100, 0, 0.1, 20),
+        #(10, 0, 0.025, 4),
+        #(10, 0, 0.025, 2),
+        #(10, 0, 0.025, 8),
+        #(100, 0, 0.1, 20),
     ],
 )
 @pytest.mark.asyncio
