@@ -18,7 +18,7 @@ __all__ = ["sync_to_async", "async_to_sync"]
 
 logger = logging.getLogger(__name__)
 #############################
-### debugging logger boilerplate
+# debugging logger boilerplate
 
 if os.environ.get("EXTRAASYNC_DEBUG"):
 
@@ -85,7 +85,8 @@ def sync_to_async(
     this will allow the nested call to
     happen in the context of that original loop. This enables the creation of
     a single code path to both async and asynchronous contexts. In other words,
-    and async function which calls a synchronous function by awaiting the "async_to_sync" counterpart to this function can have the synchronous function call back
+    and async function which calls a synchronous function by awaiting the
+    "async_to_sync" counterpart to this function can have the synchronous function call back
     asynchronous contexts using this call. This is the so called "bridge mode" [WIP]
     """
 
@@ -117,7 +118,7 @@ def sync_to_async(
         logger.debug(
             "Creating task in %s from %s",
             loop,
-            thread_name := threading.current_thread().name,
+            threading.current_thread().name,
         )
         try:
             task = loop.create_task(coro, context=sync_thread_context_copy)
@@ -214,7 +215,7 @@ class _ThreadPool:
 
     def __repr__(self):
         running = bool(self.running.get())
-        return f"<_ThreadPool with {len(self.all)} threads - with {len(self.all) - len(self.idle)} threads in use>"
+        return f"<_ThreadPool with {len(self.all)} threads - with {len(self.all) - len(self.idle)} threads in use {running =}>"
 
 
 def _in_context_sync_worker(sync_task: _SyncTask):

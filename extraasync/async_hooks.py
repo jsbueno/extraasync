@@ -99,7 +99,7 @@ if (3, 12) <= sys.version_info < (3, 13):
 if not hasattr(asyncio.BaseEventLoop, "_run_forever_cleanup"):
 
     warnings.warn(
-        f"asyncio.BaseEventLoop no longer implements  '_run_forever_cleanup', This means the  "
+        "asyncio.BaseEventLoop no longer implements  '_run_forever_cleanup', This means the  "
         "'at_loop_stop_callback' function will fail! Please, add an issue to the project reporting this at "
         "https://github.com/jsbueno/extraasync"
     )
