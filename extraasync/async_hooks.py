@@ -1,11 +1,97 @@
 import asyncio
-import warnings
+import threading
 import typing as t
+import sys
+import warnings
 
+from asyncio import events
 from asyncio.events import AbstractEventLoop
 
 
+
 DEBUG = False
+
+
+if (3, 12) <= sys.version_info < (3, 13):
+    # Monkey Patch Python 3.12 BaseEventLoop which refactors
+    # loop cleanup code in a method we can hook on!
+
+    class Py313BaseEventLoop:
+        """
+        Code from cPython 3.13 - licensing rules apply
+        Code in this class under the
+        PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+
+        This is a class stub just to hold the methods to be monkeypatched
+        into Python's asyncio BaseEventLoop
+
+        """
+        # Lib/asyncio/base_events.py
+        def _run_forever_setup(self):
+            """Prepare the run loop to process events.
+
+            This method exists so that custom event loop subclasses (e.g., event loops
+            that integrate a GUI event loop with Python's event loop) have access to all the
+            loop setup logic.
+            """
+            self._check_closed()
+            self._check_running()
+            self._set_coroutine_origin_tracking(self._debug)
+
+            self._old_agen_hooks = sys.get_asyncgen_hooks()
+            self._thread_id = threading.get_ident()
+            sys.set_asyncgen_hooks(
+                firstiter=self._asyncgen_firstiter_hook,
+                finalizer=self._asyncgen_finalizer_hook
+            )
+
+            events._set_running_loop(self)
+
+        def _run_forever_cleanup(self):
+            """Clean up after an event loop finishes the looping over events.
+
+            This method exists so that custom event loop subclasses (e.g., event loops
+            that integrate a GUI event loop with Python's event loop) have access to all the
+            loop cleanup logic.
+            """
+            self._stopping = False
+            self._thread_id = None
+            events._set_running_loop(None)
+            self._set_coroutine_origin_tracking(False)
+            # Restore any pre-existing async generator hooks.
+            if self._old_agen_hooks is not None:
+                sys.set_asyncgen_hooks(*self._old_agen_hooks)
+                self._old_agen_hooks = None
+
+        def run_forever(self):
+            """Run until stop() is called."""
+            self._run_forever_setup()
+            try:
+                while True:
+                    self._run_once()
+                    if self._stopping:
+                        break
+            finally:
+                self._run_forever_cleanup()
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        ok_to_patch = True
+    else:
+        ok_to_patch = False
+
+    if not ok_to_patch:
+        raise RuntimeError("Python 3.12 requires patching asyncio before the async loop starts."
+            " Please import extraasync before setting up your async loop"
+        )
+    asyncio.base_events.BaseEventLoop._run_forever_setup = Py313BaseEventLoop._run_forever_setup
+    asyncio.base_events.BaseEventLoop._run_forever_cleanup = Py313BaseEventLoop._run_forever_cleanup
+    asyncio.base_events.BaseEventLoop.run_forever = Py313BaseEventLoop.run_forever
+
+    # Now, it is "B.A.U."
+
+
 
 if not hasattr(asyncio.BaseEventLoop, "_run_forever_cleanup"):
 
