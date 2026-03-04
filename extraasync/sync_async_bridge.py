@@ -152,15 +152,11 @@ def _sync_to_async_non_bridge(
         try:
             loop = asyncio.new_event_loop()
         except RuntimeError:
-            raise RuntimeError(
-                D(
-                    """\
+            raise RuntimeError(D("""\
                 Error trying to create a new async loop - to be able to call 'sync_to_async' from
                 code inside a running async loop, the parent 'sync execution branch' must be called
                 with `extraasync.async_to_sync`.
-                """
-                )
-            )
+                """))
         _non_bridge_loop.set(loop)
 
     return loop.run_until_complete(coro)

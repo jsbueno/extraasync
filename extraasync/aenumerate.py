@@ -19,4 +19,3 @@ class aenumerate:
 
     def __repr__(self):
         return f"Asynchronous enumeration for {self.iterable!r} at index {self.index!r}"
-

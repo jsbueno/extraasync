@@ -7,8 +7,6 @@ import warnings
 from asyncio import events
 from asyncio.events import AbstractEventLoop
 
-
-
 DEBUG = False
 
 
@@ -26,6 +24,7 @@ if (3, 12) <= sys.version_info < (3, 13):
         into Python's asyncio BaseEventLoop
 
         """
+
         # Lib/asyncio/base_events.py
         def _run_forever_setup(self):
             """Prepare the run loop to process events.
@@ -42,7 +41,7 @@ if (3, 12) <= sys.version_info < (3, 13):
             self._thread_id = threading.get_ident()
             sys.set_asyncgen_hooks(
                 firstiter=self._asyncgen_firstiter_hook,
-                finalizer=self._asyncgen_finalizer_hook
+                finalizer=self._asyncgen_finalizer_hook,
             )
 
             events._set_running_loop(self)
@@ -82,15 +81,19 @@ if (3, 12) <= sys.version_info < (3, 13):
         ok_to_patch = False
 
     if not ok_to_patch:
-        raise RuntimeError("Python 3.12 requires patching asyncio before the async loop starts."
+        raise RuntimeError(
+            "Python 3.12 requires patching asyncio before the async loop starts."
             " Please import extraasync before setting up your async loop"
         )
-    asyncio.base_events.BaseEventLoop._run_forever_setup = Py313BaseEventLoop._run_forever_setup
-    asyncio.base_events.BaseEventLoop._run_forever_cleanup = Py313BaseEventLoop._run_forever_cleanup
+    asyncio.base_events.BaseEventLoop._run_forever_setup = (
+        Py313BaseEventLoop._run_forever_setup
+    )
+    asyncio.base_events.BaseEventLoop._run_forever_cleanup = (
+        Py313BaseEventLoop._run_forever_cleanup
+    )
     asyncio.base_events.BaseEventLoop.run_forever = Py313BaseEventLoop.run_forever
 
     # Now, it is "B.A.U."
-
 
 
 if not hasattr(asyncio.BaseEventLoop, "_run_forever_cleanup"):
@@ -150,16 +153,14 @@ def at_loop_stop_callback(
                 cb()
             except Exception as exc:
                 if not DEBUG:
-                    warnings.warn(
-                        f"""\
+                    warnings.warn(f"""\
                         Supressed Exception raised on loop callback {cb.__name__}:
                             {exc}
 
                         set extraasync.async_hooks.DEBUG to True
                         to have it raised instead.
 
-                    """
-                    )
+                    """)
                 else:
                     raise exc
         original_clean_up()
