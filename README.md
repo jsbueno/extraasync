@@ -68,7 +68,7 @@ use some fine-grained, in task, error handling for
 anything other than "a bunch of tasks, and alright if some fail".
 (Nataniel's trio has the concept of retrying groups - those
 might come in the future as other constructs to extraasync  -
-the differentiak to Trio is that extraasync will remain
+the differential to Trio is that extraasync will remain
 compatible with Python stdlib's asyncio)
 
 
