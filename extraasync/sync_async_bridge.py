@@ -280,7 +280,8 @@ def async_to_sync(
     from the current task - so that contextvars will work
     in the synchronous code.
 
-    Returns a future that will contain the results of the synchronous call
+    Returns an ``asyncio.Future`` that will contain the results
+    of the synchronous call upon being awaited.
     """
     logger.debug("Starting async_to_sync call to %s", func)
     if kwargs is None:
